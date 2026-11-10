@@ -10,7 +10,7 @@
 
 | Signal | Role |
 |--------|------|
-| Register peaks | **Positive** heatmap Gaussians at eligible `gis_id` points (weak, not exhaustive) |
+| Register peaks | **Positive** heatmap Gaussians at eligible `gis_id` points (weak, not exhaustive); **σ scales with `stamomtrek`** (1.0–2.5 m) so large crowns get wider targets |
 | **Unknown mask** | Pixels > `unknown_band_m` from any register point → **no negative loss** (unlisted canopy allowed) |
 | **Hard negative** | GRB `IngeschetstGebouw` + `Wegsegment` (2 m buffer) → strong negative (`data-download-grb`, `data-patch-chips-grb`) |
 | Chip edges | Existing ignore annulus (unchanged) |
@@ -26,9 +26,12 @@ Fine-tune from `runs/gent_real_v1/best.pt` with `--resume` when weights exist.
 | Set | CLI | Purpose |
 |-----|-----|---------|
 | Register-skewed | `data-build-gent-chips` | ~10k chips with ≥1 eligible tree |
-| Full bbox grid | `data-build-gent-grid` | 50 m grid over Gent bbox ∩ LAZ |
+| Full bbox grid | `data-build-gent-grid` (+ `--skip-existing`) | 50 m grid over Gent bbox ∩ LAZ |
+| In-place target refresh | `data-patch-chips-heatmap` | Rewrite `heatmap` (and optionally GRB) in existing `.npz` without rebuilding from LAZ |
 
 Index: `data/manifests/chips_index_full.parquet` (not committed). Same npz dir: `data/processed/chips/`.
+
+**Ops:** If you change heatmap σ after a partial grid build, **stop** the grid, run `data-patch-chips-heatmap` on all current chips, then resume grid with `--skip-existing`.
 
 ---
 

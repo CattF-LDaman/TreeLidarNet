@@ -32,6 +32,7 @@ After map review, you asked for **more detections without retraining**: lower th
 | **GRB hard negative** | Official building footprints + roads (buffered) → extra penalty for predicting trees on built infrastructure. |
 | **Fine-tune** | Start from v1 `best.pt` weights; adjust for v2 loss/masks rather than train from scratch. |
 | **Confidence score** | Model output 0–1 on each peak; **export floor** is the minimum kept at infer; map **slider** can hide weaker rings without re-infer. |
+| **Variable σ** | Training heatmap Gaussian width from register **`stamomtrek`** (1.0–2.5 m); addresses stake-sized targets vs wide crowns on large trees. |
 
 ---
 
@@ -56,6 +57,8 @@ After map review, you asked for **more detections without retraining**: lower th
 | **18:02–18:06** | Full-grid chips: **append** detections? Live map **threshold** slider? | Merge via one infer + NMS; slider on full map (not live first) |
 | **18:22–18:25** | More **training** vs tweak knobs? **Re-infer** after threshold? σ / retrain? | Resume training = refinement; σ/chips need fine-tune; τ/slider = infer-only |
 | **18:28–18:33** | Lower peak export to **0.20** (plain language); **re-infer only**; **live map** on that run | CLI `--score-threshold`; `ghent.html` slider; live infer restarted with `--live` |
+| **22:xx** | Full **50 m grid** chip build started (~139k origins); map QA → large crowns weak under fixed σ | Grid running in background; paused ~40k steps (~50k npz) to ship **variable σ** without LAZ rebuild |
+| **22:xx** | **Patch heatmaps in place**; resume grid with `--skip-existing` | `data-patch-chips-heatmap`; docs + `tests/test_heatmap_sigma.py`; train refresh after patch + grid |
 
 ---
 
@@ -199,6 +202,114 @@ After map review, you asked for **more detections without retraining**: lower th
 
 ---
 
+### 12. Full-grid chips and variable heatmap σ (late evening)
+
+**Context.** After lowering export confidence and re-inferring, qualitative map QA still showed **large crowns and clusters** under-detected while street stakes matched well — partly peak extraction (τ), partly **fixed 1.0 m** training Gaussians at register points (crown centre offset from stake).
+
+**Your direction.** Start the **full Gent 50 m grid** for citywide coverage, but adopt **σ from `stamomtrek`** without throwing away chips already built from LAZ.
+
+**Outcomes.**
+
+- **`heatmap_sigma_m`:** `σ = clamp(0.9 + 0.015 × stamomtrek, 1.0, 2.5)` m in `treelidarnet/data/chips.py`; new chips from `data-build-chips` / `data-build-gent-grid`.
+- **`data-patch-chips-heatmap`:** Rewrites `heatmap` (+ optional GRB refresh) in existing `.npz` via atomic `{stem}.tmp.npz` → replace — **no LAZ pass**.
+- **Grid pause:** Full grid job stopped ~**40k / ~139k** loop steps (~**50k** `.npz` on disk) so patch could run without file races.
+- **Resume:** `data-build-gent-grid --laz-dir data/raw/laz --skip-existing` after patch finishes; new cells get variable σ at build time.
+
+**Decision:** **Patch-then-resume** beats full grid rebuild; **fine-tune** (or more epochs) needed after heatmap change — export threshold alone does not fix training target scale.
+
+**For write-up:** Link map weakness on large trees to **label geometry** (point target + fixed σ) and separate **infer policy** (0.20 floor) from **supervision shape** (girth-scaled σ).
+
+---
+
+### 13. Levers for better detection (plain-language map)
+
+**Context.** Late in the day you asked whether **variable σ** would really help, and how it relates to everything else we had already tried (export **0.20**, GRB, unknown mask, full grid). This section is the **beginner-friendly cheat sheet** for the write-up — same story as the code, without re-reading EVAL/SPEC.
+
+**One picture.** Detection has three layers:
+
+1. **What we teach** — heatmap blobs, masks (unknown, GRB, edges).
+2. **What the model learns** — CNN on BEV LiDAR, focal loss on heatmaps; more chips and epochs.
+3. **What we keep after infer** — peak picking, NMS, score floor, map slider.
+
+Changing layer 3 **does not retrain** the network; changing layer 1 **requires retrain** to bite.
+
+#### The model in one sentence
+
+Each **chip** is a 50 m window of LiDAR seen from above. The network outputs a **heatmap** (“tree-ish here”); we turn **bright local bumps** into candidate trees ([EVAL.md](docs/EVAL.md)).
+
+#### Variable σ (what we are patching now)
+
+Training targets are **soft Gaussians** at register `(x, y)`, not single pixels.
+
+| Before | After |
+|--------|--------|
+| Every tree → ~**1 m** wide blob | **Large `stamomtrek`** → wider blob (up to **2.5 m**); small/unknown → still ~1 m |
+
+**Why we bothered:** Map QA showed **large crowns** often weak while **street stakes** matched well. LiDAR “tree-ness” spreads across the crown; a 1 m dot at the **stake** under-supervises the crown footprint. Wider blobs are a cheap alignment with girth — still centred on the register, **not** the crown centroid.
+
+**Expectation:** **Moderate** gain on big register trees after **fine-tune**; not a fix for clusters or unlisted trees alone.
+
+#### Other levers (what helps what)
+
+| Lever | Teaches the model? | Main effect |
+|-------|-------------------|-------------|
+| **Variable σ** | Yes (labels) | Bigger positive target for bigger trees |
+| **Full grid chips** | Yes (data coverage) | Train/infer on whole Gent ∩ LAZ, not only register neighbourhoods |
+| **More epochs / fine-tune** | Yes | Sharper, stabler heatmaps on existing pipeline (~3 epochs was early) |
+| **Export 0.20 + slider** | **No** | Keep/show weaker peaks the model **already** made |
+| **GRB hard negative** | Yes (mask) | Penalize trees on roofs/roads (already in chips) |
+| **Unknown mask (v2)** | Yes (mask) | Don’t punish unlisted canopy; discoveries allowed |
+| **Peak extract / NMS / top-K** | No (infer rules) | How bumps become a **list** of trees; cluster trade-offs |
+| **Offset head** (not built) | Yes (architecture) | Predict Δx,Δy from peak — classic fix for stake vs crown |
+| **CHM / DSM channel** (deferred) | Yes (inputs) | Dense height cue; extra download + chip work |
+| **Stratified metrics** | N/A (evaluation) | Split by `stamomtrek`, park vs street — see if σ moved the right bucket |
+
+**Analogies we used in chat** (for the report narrative):
+
+- **Lower τ / slider** — turning down a “minimum score to pass” filter: you **see** more students, you didn’t teach them better.
+- **More epochs** — more practice with the same answer key.
+- **Full grid** — practicing the whole city map, not only streets that already have inventory signs.
+- **σ** — the answer key blobs got **wider** for big trees; training still required to learn from the new key.
+
+#### What variable σ does *not* fix (honest limits)
+
+- **Stake vs crown centre** — target is still the inventory point; wide oak can be “right” off-centre in LiDAR.
+- **Clusters** — one Gaussian per `gis_id`; overlapping crowns still fight **one peak / NMS**.
+- **Diffuse heatmaps** — training may encourage broader bumps; **peak extract** can still miss flat responses unless infer rules change.
+- **Discoveries** — unlisted trees depend on **unknown mask + coverage**, not girth labels.
+
+#### Bundled plan vs science fair knobs
+
+**Tonight’s agreed bundle** (patch → grid → train → infer) hits the best **first bundle**: fix labels (σ), widen coverage (grid), then **re-learn** (fine-tune). **0.20 export** was the right **QA** move earlier; it does not substitute for that bundle.
+
+**For write-up:** Frame improvements as **three layers** (teach / learn / keep). Session priority = layer 1+2 for large-tree complaints; layer 3 already partially opened for exploration.
+
+---
+
+## Where the night ended (handoff for the next day)
+
+By the time we closed the laptop, the **full-grid LAZ build was paused** on purpose (~40k of ~139k grid steps, ~50k `.npz` on disk). Variable σ was implemented in code; existing chips were being **updated in place** rather than rebuilt from LAZ.
+
+**What was still running:** `data-patch-chips-heatmap` over **~50,451** chips (log: `data/logs/patch_heatmap.log`; progress every 500 lines). Defaults included **GRB refresh** from `data/raw/grb`, not heatmap-only (`--no-grb` was not used). Watch with `tail -f data/logs/patch_heatmap.log`; finish when the log shows **Done patching** or **50451/50451**.
+
+**What we agreed not to do yet:** **Wait for the heatmap patch to finish** before starting `data-build-gent-grid` (sequential run — no parallel patch + grid). Then resume grid with **`--skip-existing`** so ~50k patched chips are kept and only **missing** cells are built (new builds already use variable σ in `build_chip`). Do **not** expect the current `gent_canopy_v2/best.pt` to improve on large crowns without **retraining** — export **0.20** and the map slider only change which peaks we keep at infer time; they do not change the old **fixed 1.0 m** targets the model already learned.
+
+**Remember tomorrow, in order:**
+
+1. Confirm the **patch** finished (`Done patching` or **50451/50451** in `patch_heatmap.log`; no `data-patch-chips-heatmap` process).
+2. **Resume the full grid** (patched chips unchanged; new cells get variable σ at build):
+
+   `uv run treelidarnet data-build-gent-grid --laz-dir data/raw/laz --skip-existing 2>&1 | tee -a data/logs/build_gent_grid.log`
+
+   Let this run when the machine has headroom (long job; don’t stack train + grid on a tight laptop if avoidable).
+3. When ready for **citywide training** (ideally after most of the grid exists, or accept a smaller interim set): **fine-tune v2** on the patched chips — fresh run from `gent_canopy_v2/best.pt` or continued epochs with `configs/gent_canopy_v2.yaml`, not “resume” as if targets were unchanged.
+4. After a new checkpoint: **`infer-gent`** again (`--score-threshold 0.2` if keeping the same export policy) and map QA on large trees / clusters.
+5. Optional housekeeping: commit local docs + σ/patch CLI when satisfied; push when `main` should match the machine.
+
+**Shortcut if impatient:** Fine-tune on the ~50k patched chips **while** the grid keeps building — valid for testing σ; full-Gent training still waits on the grid + index manifest.
+
+---
+
 ## Decision log
 
 | When | Decision | Rationale |
@@ -216,6 +327,8 @@ After map review, you asked for **more detections without retraining**: lower th
 | Evening | Push `5d48c47` | Remote was behind; code-only artifact |
 | Late evening | Export floor **0.20**, slider on **ghent.html** | More candidates without retrain; user filters upward |
 | Late evening | Re-infer with live export at 0.20 | Single city bundle + polling map aligned |
+| Late evening | Pause full grid; **patch heatmaps** in place | Variable σ without LAZ rebuild; avoid concurrent write races |
+| Late evening | Grid **`--skip-existing`** after patch | Complete ~139k origins; keep ~50k patched chips |
 
 ---
 
@@ -235,14 +348,16 @@ After map review, you asked for **more detections without retraining**: lower th
 | Map QA (evening) | Large crowns weak; street trees + discoveries strong | Informs threshold/export work |
 | Export policy | Min confidence **0.20** at infer; map slider from 0.20 upward | `infer-gent --score-threshold 0.2` |
 | Second live pass | Re-infer 10 686 with `--live` + 0.20 floor | `exports/inference/live/`, log `infer_conf02_live.log` |
+| Full grid (partial) | ~50k `.npz`, grid build paused mid-run | Resume with `--skip-existing`; index incomplete until grid done |
+| Heatmap σ | Per-tree from `stamomtrek` | Patch CLI + tests; then fine-tune v2 |
 
 ---
 
 ## Limitations and open threads
 
-- **Coverage:** Train/infer chips skewed to register neighbourhoods; full 50 m grid not built on laptop.
+- **Coverage:** Register-skewed set still used for train until full grid completes; ~50k grid chips on disk; see **Where the night ended** for patch → grid → train order.
 - **Checkpoint:** Early fine-tune; smoke metrics misleading vs map QA.
-- **Large trees / clusters:** Peak extractor + point targets + stake offset (see §10).
+- **Large trees / clusters:** Peak extractor + point targets + stake offset (see §10); **variable σ** targets mitigate but need re-train.
 - **Threshold:** Export floor now **0.20** (infer); val tuning still future; slider on full map for QA.
 - **THOUGHT_PROCESS / uncommitted viewer tweaks:** May lag `main` until next push.
 - **Multimodal:** Satellite + LiDAR raised by you; not implemented (DSM/DTM optional future).
@@ -262,6 +377,8 @@ After map review, you asked for **more detections without retraining**: lower th
 | [docs/DEV.md](docs/DEV.md) | Commands: train, infer-gent, live viewer |
 | [docs/VISUALIZATION.md](docs/VISUALIZATION.md) | Map layers and bundles |
 
+§13 is the **beginner-facing** summary of detection levers (labels vs train vs infer).
+
 ---
 
-*Generated from Cursor session transcript (2026-11-10), including late-evening export-confidence and live-map thread. For code state after this narrative, see git history on `main`.*
+*Generated from Cursor session transcript (2026-11-10), including export-confidence, live-map, full-grid, variable-heatmap-σ, and detection-levers explainer. For code state after this narrative, see git history on `main`.*

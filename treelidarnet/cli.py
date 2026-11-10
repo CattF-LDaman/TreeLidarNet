@@ -15,6 +15,7 @@ from treelidarnet.data.download_grb import download_gent_grb
 from treelidarnet.data.download_laz import download_gent_laz
 from treelidarnet.data.import_gent import DEFAULT_EXPORT_URL, import_gent_geojson
 from treelidarnet.data.patch_grb_masks import patch_chips_grb
+from treelidarnet.data.patch_heatmaps import patch_chips_heatmaps
 from treelidarnet.data.split import (
     init_split_meta_from_example,
     load_split_meta,
@@ -104,6 +105,18 @@ def _cmd_data_build_gent_grid(args: argparse.Namespace) -> int:
         trees_parquet=Path(args.trees),
         laz_dir=Path(args.laz_dir),
         dtm_path=dtm,
+        limit=int(args.limit) if args.limit else None,
+        skip_existing=bool(args.skip_existing),
+    )
+    return 0
+
+
+def _cmd_data_patch_chips_heatmap(args: argparse.Namespace) -> int:
+    patch_chips_heatmaps(
+        trees_parquet=Path(args.trees),
+        grb_dir=Path(args.grb_dir) if args.grb_dir else None,
+        road_buffer_m=float(args.road_buffer_m),
+        refresh_hard_negative=not args.no_grb,
         limit=int(args.limit) if args.limit else None,
     )
     return 0
@@ -258,6 +271,17 @@ def main(argv: list[str] | None = None) -> int:
     p_grb_patch.add_argument("--limit", default=None)
     p_grb_patch.set_defaults(func=_cmd_data_patch_chips_grb)
 
+    p_hm_patch = sub.add_parser(
+        "data-patch-chips-heatmap",
+        help="Rewrite heatmap (variable σ) in existing npz; optional GRB refresh",
+    )
+    p_hm_patch.add_argument("--trees", default=str(manifests_dir() / "gent_trees.parquet"))
+    p_hm_patch.add_argument("--grb-dir", default="data/raw/grb")
+    p_hm_patch.add_argument("--road-buffer-m", default="2.0")
+    p_hm_patch.add_argument("--no-grb", action="store_true")
+    p_hm_patch.add_argument("--limit", default=None)
+    p_hm_patch.set_defaults(func=_cmd_data_patch_chips_heatmap)
+
     p_grid = sub.add_parser(
         "data-build-gent-grid",
         help="50 m grid chips over Gent bbox → chips_index_full.parquet",
@@ -266,6 +290,11 @@ def main(argv: list[str] | None = None) -> int:
     p_grid.add_argument("--laz-dir", default="data/raw/laz")
     p_grid.add_argument("--dtm", default=None)
     p_grid.add_argument("--limit", default=None)
+    p_grid.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Do not rebuild npz that already exist (resume grid after patch)",
+    )
     p_grid.set_defaults(func=_cmd_data_build_gent_grid)
 
     p_chips = sub.add_parser("data-build-chips", help="Build npz chips from LAZ")

@@ -12,6 +12,7 @@ from treelidarnet.data.chips import (
     CHIP_SIZE_M,
     chip_id,
     grid_cells,
+    heatmap_sigma_m,
     make_ignore_mask,
     make_unknown_mask,
     rasterize_heatmap,
@@ -50,7 +51,10 @@ def build_chip(
     h_agl, qc = height_above_ground(xyz, feat, dtm_path=dtm_path)
     n = grid_cells()
     chip_trees = _trees_in_chip(trees_df, x0, y0, CHIP_SIZE_M)
-    tree_xy = list(zip(chip_trees["x"].tolist(), chip_trees["y"].tolist(), strict=False))
+    tree_xy = [
+        (float(r.x), float(r.y), heatmap_sigma_m(r.get("stamomtrek")))
+        for r in chip_trees.to_dict("records")
+    ]
     heatmap = rasterize_heatmap(tree_xy, origin_x=x0, origin_y=y0)
     ignore = make_ignore_mask(n, n)
     unknown = make_unknown_mask(tree_xy, origin_x=x0, origin_y=y0)

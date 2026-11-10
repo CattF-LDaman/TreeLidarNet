@@ -9,6 +9,22 @@ CELL_SIZE_M = 0.25
 EDGE_IGNORE_INNER_M = 8.0
 EDGE_IGNORE_OUTER_M = 15.0
 HEATMAP_SIGMA_M = 1.0
+HEATMAP_SIGMA_MIN_M = 1.0
+HEATMAP_SIGMA_MAX_M = 2.5
+
+
+def heatmap_sigma_m(stamomtrek: float | None) -> float:
+    """Per-tree Gaussian σ from trunk girth (register); default HEATMAP_SIGMA_M if unknown."""
+    if stamomtrek is None:
+        return HEATMAP_SIGMA_M
+    try:
+        st = float(stamomtrek)
+    except (TypeError, ValueError):
+        return HEATMAP_SIGMA_M
+    if st != st or st <= 0:
+        return HEATMAP_SIGMA_M
+    sigma = 0.9 + st * 0.015
+    return float(max(HEATMAP_SIGMA_MIN_M, min(HEATMAP_SIGMA_MAX_M, sigma)))
 
 
 def chip_id(x0: float, y0: float) -> str:
@@ -71,7 +87,7 @@ def make_unknown_mask(
 
 
 def rasterize_heatmap(
-    tree_xy: list[tuple[float, float]],
+    tree_xy: list[tuple[float, float]] | list[tuple[float, float, float]],
     *,
     origin_x: float,
     origin_y: float,
@@ -86,7 +102,13 @@ def rasterize_heatmap(
     yy, xx = np.mgrid[0:n, 0:n]
     cell_x = origin_x + (xx + 0.5) * cell_size_m
     cell_y = origin_y + (yy + 0.5) * cell_size_m
-    for tx, ty in tree_xy:
+    for item in tree_xy:
+        if len(item) >= 3:
+            tx, ty, sig = float(item[0]), float(item[1]), float(item[2])
+        else:
+            tx, ty, sig = float(item[0]), float(item[1]), sigma_m
         d2 = (cell_x - tx) ** 2 + (cell_y - ty) ** 2
-        heat = np.maximum(heat, np.exp(-d2 / (2 * sigma_m * sigma_m)).astype(np.float32))
+        heat = np.maximum(
+            heat, np.exp(-d2 / (2 * sig * sig)).astype(np.float32)
+        )
     return heat

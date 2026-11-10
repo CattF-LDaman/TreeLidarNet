@@ -17,7 +17,7 @@
 
 | Choice | Rationale |
 |--------|-----------|
-| **Targets** | Heatmap peaks only at **eligible** `gis_id` points in each chip |
+| **Targets** | Heatmap Gaussians at **eligible** `gis_id` points; width **σ** from `stamomtrek` (wider peak for larger girth, capped 1.0–2.5 m) |
 | **No “all canopy” mask** | We do not have full-tree labels; training on every green blob would need another data source |
 | **Positive chips** | Built where ≥1 eligible tree lies in the 50 m patch (`data-build-gent-chips`) |
 | **Negative chips** | Optional road/roof-heavy chips (spec §5.5) — avoid random park chips where **unlabeled trees** would punish true detections |

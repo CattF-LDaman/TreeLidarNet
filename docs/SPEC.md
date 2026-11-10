@@ -146,7 +146,7 @@ CHM baseline uses the **same** DTM for fair comparison (Appendix A).
 
 Rasterize tree locations onto a **0.25 m** grid inside the chip:
 
-- **Center heatmap:** Gaussian σ = 1.0 m at each matched tree xy.
+- **Center heatmap:** Gaussian at each eligible tree xy; **per-tree σ** from register `stamomtrek` (girth in cm): `σ = clamp(0.9 + 0.015 × st, 1.0, 2.5)` m; **1.0 m** if missing/invalid (`treelidarnet.data.chips.heatmap_sigma_m`).
 - **Ignore mask:** Annulus 8–15 m from chip edge (incomplete context).
 
 Trees outside chip but inside buffer contribute to **ignore**, not negative.

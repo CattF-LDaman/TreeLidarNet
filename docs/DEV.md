@@ -38,7 +38,10 @@ uv run treelidarnet data-build-chips --laz-dir data/raw/laz --origins "200000,19
 uv run treelidarnet train --config configs/gent_bev_v1.yaml
 
 # Canopy v2 (broad tree finding, soft register + unknown mask):
-# uv run treelidarnet data-build-gent-grid --laz-dir data/raw/laz   # long; writes chips_index_full.parquet
+# uv run treelidarnet data-download-grb
+# uv run treelidarnet data-patch-chips-grb          # optional: GRB hard_negative on existing npz
+# uv run treelidarnet data-patch-chips-heatmap      # rewrite heatmap (variable σ); refreshes GRB unless --no-grb
+# uv run treelidarnet data-build-gent-grid --laz-dir data/raw/laz --skip-existing   # resume full grid (~days)
 # uv run treelidarnet train --config configs/gent_canopy_v2.yaml    # loads gent_real_v1/best.pt via init_checkpoint
 # uv run treelidarnet train --config configs/gent_canopy_v2.yaml --resume
 
@@ -56,7 +59,8 @@ uv run ruff check treelidarnet tests
 ## Data layout
 
 - `data/raw/laz/` — downloaded LAZ (gitignored)
-- `data/processed/chips/` — training npz (gitignored; do not commit). Rebuild after unknown-mask changes.
+- `data/processed/chips/` — training npz (gitignored; do not commit). After **unknown-mask** or **heatmap σ** logic changes: use `data-patch-chips-heatmap` on existing chips (no LAZ re-read) or full rebuild; do not run grid build and heatmap patch on the same chips at once.
+- `data/logs/` — long jobs: `build_gent_grid.log`, `patch_heatmap.log` (optional `tee` / `nohup`)
 - `data/manifests/chips_index_full.parquet` — full 50 m grid manifest from `data-build-gent-grid`
 - `data/manifests/split_meta.json` — edit kaartblad lists after `data-write-split-meta`
 
