@@ -14,7 +14,7 @@ from treelidarnet.export_mapjson import export_inference_gz
 from treelidarnet.metrics import GroundTruth, match_detections
 from treelidarnet.models.gent_detector import GentTreeDetector
 from treelidarnet.paths import chips_dir, exports_dir
-from treelidarnet.postprocess import extract_peaks_from_heatmap
+from treelidarnet.postprocess import DEFAULT_PEAK_SCORE_THRESHOLD, extract_peaks_from_heatmap
 
 
 def load_model(checkpoint: Path, device: torch.device) -> GentTreeDetector:
@@ -34,6 +34,7 @@ def infer_chip(
     trees_parquet: Path,
     export_path: Path | None = None,
     model_id: str = "gent_bev_v1",
+    score_threshold: float = DEFAULT_PEAK_SCORE_THRESHOLD,
 ) -> Path:
     npz = chips_dir() / f"{chip_id}.npz"
     if not npz.is_file():
@@ -47,7 +48,13 @@ def infer_chip(
         heat = model(bev).squeeze(0).squeeze(0).cpu().numpy()
     origin = np.load(npz)["origin"]
     x0, y0 = float(origin[0]), float(origin[1])
-    preds = extract_peaks_from_heatmap(heat, origin_x=x0, origin_y=y0, cell_size=CELL_SIZE_M)
+    preds = extract_peaks_from_heatmap(
+        heat,
+        origin_x=x0,
+        origin_y=y0,
+        cell_size=CELL_SIZE_M,
+        score_threshold=score_threshold,
+    )
     df = pd.read_parquet(trees_parquet)
     chip_size = grid_cells() * CELL_SIZE_M
     m = (

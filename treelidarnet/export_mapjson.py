@@ -82,6 +82,7 @@ def export_city_gz(
     predictions: list[Detection],
     metrics: MatchResult | None = None,
     chip_count: int = 0,
+    peak_extract_min_score: float | None = None,
 ) -> None:
     gt_trees = []
     for row in gt_rows:
@@ -117,6 +118,11 @@ def export_city_gz(
         "gt_trees": gt_trees,
         "predictions": preds,
     }
+    if peak_extract_min_score is not None:
+        payload["peak_extract_min_score"] = float(peak_extract_min_score)
+        payload["peak_extract_note"] = (
+            "Peaks exported at or above peak_extract_min_score; map slider can show a higher minimum."
+        )
     if metrics:
         payload["metrics"] = {
             "precision_at_3m": metrics.precision,

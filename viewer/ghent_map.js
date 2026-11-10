@@ -15,14 +15,23 @@
   map.addControl(overlay);
 
   var allGt = [];
-  var allPred = [];
+  var allPredRaw = [];
   var metrics = null;
   var showGt = true;
   var showPred = true;
   var showHeat = false;
+  var scoreMin = 0.35;
+  var exportFloor = 0.2;
+
+  function filteredPreds() {
+    return allPredRaw.filter(function (d) {
+      return (d.score != null ? d.score : 0) >= scoreMin;
+    });
+  }
 
   function updateLayers() {
-    TreeLidarMap.syncOverlay(overlay, allGt, allPred, {
+    var preds = filteredPreds();
+    TreeLidarMap.syncOverlay(overlay, allGt, preds, {
       showGt: showGt,
       showPred: showPred,
       showPredHeat: showHeat,
@@ -33,15 +42,22 @@
       "z" +
       z.toFixed(1) +
       " · <b>" +
-      allPred.length.toLocaleString() +
-      "</b> model trees · " +
+      preds.length.toLocaleString() +
+      "</b> model (confidence ≥ " +
+      scoreMin.toFixed(2) +
+      ") · " +
+      allPredRaw.length.toLocaleString() +
+      " exported (floor " +
+      exportFloor.toFixed(2) +
+      ") · " +
       allGt.length.toLocaleString() +
       " register" +
       (m
         ? "<br>audit F1 <b>" +
           (m.f1_audit_at_3m || m.f1_at_3m).toFixed(2) +
           "</b> · strict " +
-          m.f1_at_3m.toFixed(2)
+          m.f1_at_3m.toFixed(2) +
+          " <span style='color:#6e7681'>(at infer export floor)</span>"
         : "");
   }
 
@@ -59,8 +75,30 @@
     try {
       var payload = await loadGzipJson(DATA_URL);
       allGt = payload.gt_trees || [];
-      allPred = payload.predictions || [];
+      allPredRaw = payload.predictions || [];
       metrics = payload.metrics || null;
+      exportFloor =
+        payload.peak_extract_min_score != null ? payload.peak_extract_min_score : 0.2;
+      var threshInput = document.getElementById("score-thresh");
+      var threshVal = document.getElementById("thresh-val");
+      var threshHelp = document.getElementById("thresh-help");
+      if (threshInput) {
+        threshInput.min = String(Math.max(0.15, exportFloor));
+        threshInput.max = "0.95";
+        if (parseFloat(threshInput.value, 10) < exportFloor) {
+          threshInput.value = String(Math.max(exportFloor, 0.35));
+        }
+        scoreMin = parseFloat(threshInput.value, 10);
+        if (threshVal) threshVal.textContent = scoreMin.toFixed(2);
+        if (threshHelp && payload.peak_extract_note) {
+          threshHelp.textContent = payload.peak_extract_note;
+        } else if (threshHelp) {
+          threshHelp.textContent =
+            "Export floor " +
+            exportFloor.toFixed(2) +
+            "; slide right to hide weaker rings.";
+        }
+      }
       map.once("load", updateLayers);
       if (map.loaded()) updateLayers();
     } catch (e) {
@@ -81,6 +119,18 @@
     showHeat = e.target.checked;
     updateLayers();
   };
+
+  var threshInput = document.getElementById("score-thresh");
+  var threshVal = document.getElementById("thresh-val");
+  if (threshInput) {
+    threshInput.oninput = function (e) {
+      scoreMin = parseFloat(e.target.value, 10);
+      if (threshVal) threshVal.textContent = scoreMin.toFixed(2);
+      updateLayers();
+    };
+  }
+
+  map.on("zoom", updateLayers);
 
   boot();
 })();

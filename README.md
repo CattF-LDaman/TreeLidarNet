@@ -14,6 +14,8 @@ uv run treelidarnet data-write-split-meta
 
 See [docs/DEV.md](docs/DEV.md) for CUDA/CPU notes, LAZ chip build, train/infer, and the Deck.GL viewer.
 
+**Project narrative:** [THOUGHT_PROCESS.MD](THOUGHT_PROCESS.MD) — design diary (pivot to canopy v2, decisions, session timeline) for write-ups.
+
 **Documentation:**
 
 | Doc | Contents |

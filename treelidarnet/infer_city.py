@@ -18,7 +18,12 @@ from treelidarnet.infer import load_model
 from treelidarnet.live_export import export_gt_gz, write_live_predictions, write_status
 from treelidarnet.metrics import match_detections
 from treelidarnet.paths import chips_dir, exports_dir
-from treelidarnet.postprocess import Detection, extract_peaks_from_heatmap, merge_chip_detections
+from treelidarnet.postprocess import (
+    DEFAULT_PEAK_SCORE_THRESHOLD,
+    Detection,
+    extract_peaks_from_heatmap,
+    merge_chip_detections,
+)
 
 
 def infer_gent_city(
@@ -34,6 +39,7 @@ def infer_gent_city(
     live: bool = False,
     live_flush_every: int = 150,
     progress_every: int = 50,
+    score_threshold: float = DEFAULT_PEAK_SCORE_THRESHOLD,
 ) -> Path:
     if chips_index is not None and chips_index.is_file():
         paths = chip_paths_from_index(chips_index)
@@ -60,7 +66,11 @@ def infer_gent_city(
         print(f"live map: poll viewer/ghent_live.html (data under {live_dir})", flush=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"infer {len(paths)} chips batch={batch_size} device={device}", flush=True)
+    print(
+        f"infer {len(paths)} chips batch={batch_size} device={device} "
+        f"min_confidence={score_threshold}",
+        flush=True,
+    )
     model = load_model(checkpoint, device)
     ds = ChipDataset(paths)
     loader = DataLoader(
@@ -92,6 +102,7 @@ def infer_gent_city(
                 origin_x=x0,
                 origin_y=y0,
                 cell_size=CELL_SIZE_M,
+                score_threshold=score_threshold,
             )
             chip_detections.append((cid, peaks))
         done = idx
@@ -144,6 +155,7 @@ def infer_gent_city(
         predictions=merged,
         metrics=metrics,
         chip_count=len(paths),
+        peak_extract_min_score=score_threshold,
     )
     print(
         f"metrics audit F1={metrics.f1_audit:.3f} strict F1={metrics.f1:.3f} "

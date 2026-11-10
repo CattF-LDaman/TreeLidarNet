@@ -181,6 +181,7 @@ def _cmd_infer(args: argparse.Namespace) -> int:
         trees_parquet=Path(args.trees),
         export_path=Path(args.export) if args.export else None,
         model_id=args.model_id,
+        score_threshold=float(args.score_threshold),
     )
     print(f"Export: {out}")
     return 0
@@ -201,6 +202,7 @@ def _cmd_infer_gent(args: argparse.Namespace) -> int:
         live=args.live,
         live_flush_every=int(args.live_flush_every),
         progress_every=int(args.progress_every),
+        score_threshold=float(args.score_threshold),
     )
     print(f"Export: {out}")
     return 0
@@ -317,6 +319,11 @@ def main(argv: list[str] | None = None) -> int:
     p_infer.add_argument("--trees", default=str(manifests_dir() / "gent_trees.parquet"))
     p_infer.add_argument("--export", default=None)
     p_infer.add_argument("--model-id", default="gent_bev_v1")
+    p_infer.add_argument(
+        "--score-threshold",
+        default="0.2",
+        help="Minimum model confidence (0–1) to export a peak",
+    )
     p_infer.set_defaults(func=_cmd_infer)
 
     p_city = sub.add_parser("infer-gent", help="Infer all chips → city map JSON.gz")
@@ -341,6 +348,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_city.add_argument("--live-flush-every", default="150")
     p_city.add_argument("--progress-every", default="50")
+    p_city.add_argument(
+        "--score-threshold",
+        default="0.2",
+        help="Minimum model confidence (0–1) to export a peak",
+    )
     p_city.set_defaults(func=_cmd_infer_gent)
 
     args = parser.parse_args(argv)

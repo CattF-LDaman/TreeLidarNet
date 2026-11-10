@@ -31,7 +31,7 @@ After forward pass, heatmap **H** has shape matching the 0.25 m BEV grid (200×2
 |-----------|---------|-------|
 | Activation | `sigmoid(H)` | Already applied in head |
 | Local max filter | **2.0 m** radius (8 px at 0.25 m) | scipy `maximum_filter` or max-pool |
-| Score threshold | **0.35** initial; tune on **val** for max F1 | Store chosen threshold in checkpoint meta |
+| Score threshold (min confidence) | **0.20** default export; override `--score-threshold`; tune on **val** | Map slider filters higher without re-infer |
 | Top-K cap | **64** per chip | Prevent heatmap speckle explosions |
 | Sub-pixel refine | If offset head present: `xy_cell + offset` | Optional v1 |
 

@@ -7,6 +7,9 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.ndimage import maximum_filter
 
+# Minimum heatmap confidence (0–1) to export a peak at inference time.
+DEFAULT_PEAK_SCORE_THRESHOLD = 0.20
+
 
 @dataclass(frozen=True)
 class Detection:
@@ -23,7 +26,7 @@ def extract_peaks_from_heatmap(
     origin_y: float,
     cell_size: float = 0.25,
     local_max_radius_m: float = 2.0,
-    score_threshold: float = 0.35,
+    score_threshold: float = DEFAULT_PEAK_SCORE_THRESHOLD,
     top_k: int = 64,
 ) -> list[Detection]:
     h, w = heatmap.shape

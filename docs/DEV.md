@@ -65,7 +65,7 @@ uv run ruff check treelidarnet tests
 City demo (after `infer-gent`):
 
 ```bash
-uv run treelidarnet infer-gent --checkpoint runs/gent_canopy_v2/best.pt
+uv run treelidarnet infer-gent --checkpoint runs/gent_canopy_v2/best.pt --score-threshold 0.2
 make viewer-serve   # http://127.0.0.1:8765/viewer/ghent.html
 ```
 
