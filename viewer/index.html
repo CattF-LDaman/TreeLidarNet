@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TreeLidarNet — inference</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+  <style>
+    body { margin: 0; background: #0d1117; color: #e6edf3; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; z-index: 2; top: 1rem; left: 1rem;
+      background: rgba(13,17,23,0.85); padding: 1rem; border-radius: 0.5rem;
+      border: 1px solid rgba(255,255,255,0.1); max-width: 20rem;
+    }
+    input[type=file] { width: 100%; font-size: 0.75rem; }
+    #status { font-size: 0.8rem; color: #8b949e; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="panel">
+    <h1 style="font-size:1rem;margin:0 0 0.5rem">TreeLidarNet chip viewer</h1>
+    <input type="file" id="file" accept=".json,.gz,application/gzip">
+    <div id="status">Load exports/inference/*.json.gz</div>
+  </div>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/deck.gl@9.2.7/dist.min.js"></script>
+  <script src="map.js"></script>
+</body>
+</html>

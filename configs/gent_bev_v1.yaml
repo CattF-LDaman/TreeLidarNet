@@ -1,0 +1,16 @@
+# Task: match Stad Gent register locations in LiDAR (not full-city canopy segmentation).
+task: register_tree_detection
+run_name: gent_bev_v1
+chip_glob: "*.npz"
+in_channels: 4
+base_channels: 32
+batch_size: 4
+epochs: 20
+lr: 0.001
+# Overwrite runs/<run_name>/latest.pt every N steps (0 = end-of-epoch only).
+checkpoint_every_steps: 500
+
+paths:
+  dsm: null
+  dtm: null
+  trees_parquet: data/manifests/gent_trees.parquet

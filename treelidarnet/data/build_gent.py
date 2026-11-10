@@ -1,0 +1,77 @@
+"""Build all tree-centered chips for Gent."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from treelidarnet.data.build_chips import build_chip
+from treelidarnet.data.chips import CHIP_SIZE_M
+from treelidarnet.paths import chips_dir, manifests_dir
+
+
+def index_laz_files(laz_dir: Path) -> dict[tuple[int, int], Path]:
+    index: dict[tuple[int, int], Path] = {}
+    for p in laz_dir.glob("*.laz"):
+        m = re.search(r"_(\d+)_(\d+)\.laz$", p.name, re.I)
+        if m:
+            index[(int(m.group(1)), int(m.group(2)))] = p
+    return index
+
+
+def laz_paths_for_chip(x0: float, y0: float, index: dict[tuple[int, int], Path]) -> list[Path]:
+    x1, y1 = x0 + CHIP_SIZE_M, y0 + CHIP_SIZE_M
+    keys = set()
+    for tx in {int(np.floor(x0 / 500) * 500), int(np.floor((x1 - 1e-6) / 500) * 500)}:
+        for ty in {int(np.floor(y0 / 500) * 500), int(np.floor((y1 - 1e-6) / 500) * 500)}:
+            keys.add((tx, ty))
+    return [index[k] for k in keys if k in index]
+
+
+def unique_chip_origins(trees_parquet: Path) -> list[tuple[float, float]]:
+    df = pd.read_parquet(trees_parquet)
+    df = df[df["eligible"]]
+    x0 = np.floor(df.x.to_numpy() / CHIP_SIZE_M) * CHIP_SIZE_M
+    y0 = np.floor(df.y.to_numpy() / CHIP_SIZE_M) * CHIP_SIZE_M
+    return sorted({(float(a), float(b)) for a, b in zip(x0, y0, strict=False)})
+
+
+def build_gent_chips(
+    *,
+    trees_parquet: Path,
+    laz_dir: Path,
+    dtm_path: Path | None = None,
+    limit: int | None = None,
+) -> pd.DataFrame:
+    index = index_laz_files(laz_dir)
+    if not index:
+        raise FileNotFoundError(f"No indexed LAZ in {laz_dir}")
+    origins = unique_chip_origins(trees_parquet)
+    if limit:
+        origins = origins[:limit]
+    trees_df = pd.read_parquet(trees_parquet)
+    rows = []
+    skipped = 0
+    for i, (x0, y0) in enumerate(origins, 1):
+        laz_paths = laz_paths_for_chip(x0, y0, index)
+        if not laz_paths:
+            skipped += 1
+            continue
+        _, meta = build_chip(
+            x0=x0,
+            y0=y0,
+            laz_paths=laz_paths,
+            trees_df=trees_df,
+            dtm_path=dtm_path,
+        )
+        rows.append(meta)
+        if i % 200 == 0:
+            print(f"chips {i}/{len(origins)} built={len(rows)} skip={skipped}", flush=True)
+    idx = pd.DataFrame(rows)
+    out = manifests_dir() / "chips_index.parquet"
+    idx.to_parquet(out, index=False)
+    print(f"Done: {len(rows)} chips, skipped {skipped} (no LAZ)", flush=True)
+    return idx

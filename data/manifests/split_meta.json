@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "split_unit": "ngi_kaartblad",
+  "lidar_epoch": "DHMV_II_2013-2015",
+  "gent_export_url": "https://data.stad.gent/api/explore/v2.1/catalog/datasets/locaties-bomen-gent/exports/geojson",
+  "gent_export_fetched_at": "2026-11-10T12:00:00Z",
+  "gent_trees_parquet_sha256": "82e6cc9765f9de43d3c4745c898ca12737662efb751733b98cec2157c332e50c",
+  "gent_record_count": 68232,
+  "gent_eligible_count": 59619,
+  "label_eligibility": {
+    "aanlegjaar_max_lidar_year": 2015,
+    "exclude_beheerfase_patterns": [
+      "Afbraak",
+      "Verwijderd"
+    ]
+  },
+  "sheets": {
+    "train": [
+      "31",
+      "32"
+    ],
+    "val": [
+      "29"
+    ],
+    "test": [
+      "30"
+    ]
+  },
+  "chip_sampling": {
+    "train_positive_negative_ratio": "1:2",
+    "include_negative_chips_train": true
+  },
+  "seed": 42
+}

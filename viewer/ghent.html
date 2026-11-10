@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TreeLidarNet — Ghent inference</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+  <style>
+    body { margin: 0; background: #0d1117; color: #e6edf3; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; z-index: 2; top: 1rem; left: 1rem;
+      background: rgba(13,17,23,0.88); padding: 1rem 1.1rem; border-radius: 0.5rem;
+      border: 1px solid rgba(255,255,255,0.12); max-width: 22rem; font-size: 0.8rem;
+      backdrop-filter: blur(8px);
+    }
+  .panel h1 { font-size: 1rem; margin: 0 0 0.35rem; color: #7ee787; }
+  .panel .sub { color: #8b949e; margin-bottom: 0.6rem; line-height: 1.35; }
+  label { display: flex; align-items: center; gap: 0.4rem; margin: 0.25rem 0; cursor: pointer; }
+  #stats { margin-top: 0.6rem; color: #8b949e; font-size: 0.75rem; line-height: 1.4; }
+  .legend span { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="panel">
+    <h1>Ghent · register vs LiDAR</h1>
+    <p class="sub">Green filled = Stad Gent register. Amber rings = LiDAR model (under green).</p>
+    <div style="display:flex;gap:1rem;margin-bottom:0.5rem;color:#c9d1d9;font-size:0.75rem">
+      <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#34d399;vertical-align:middle"></span> Register</span>
+      <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;border:3px solid #fbbf24;vertical-align:middle;box-sizing:border-box"></span> Model</span>
+    </div>
+    <label><input type="checkbox" id="show-gt" checked> Show register (green)</label>
+    <label><input type="checkbox" id="show-pred" checked> Show model (amber rings)</label>
+    <label><input type="checkbox" id="show-heat"> Model density heatmap (optional)</label>
+    <div id="stats">Loading…</div>
+  </div>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/deck.gl@9.2.7/dist.min.js"></script>
+  <script src="map_layers.js"></script>
+  <script src="ghent_map.js"></script>
+</body>
+</html>
