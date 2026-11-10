@@ -1,6 +1,6 @@
 # TreeLidarNet
 
-Train PyTorch models to **align DHMV II LiDAR with Stad Gent’s municipal tree register** ([**locaties-bomen-gent**](https://data.stad.gent/explore/dataset/locaties-bomen-gent/) — managed trees only, not every canopy). See [docs/LABELS.md](docs/LABELS.md) for partial-inventory training and **strict vs audit** metrics.
+Find **trees in Ghent broadly** from **DHMV II LiDAR** (PyTorch BEV detector). Stad Gent’s [**locaties-bomen-gent**](https://data.stad.gent/explore/dataset/locaties-bomen-gent/) is **weak supervision** and a **secondary** benchmark — not the product census. See [docs/TASK_GHENT_BROAD.md](docs/TASK_GHENT_BROAD.md) and [docs/LABELS.md](docs/LABELS.md).
 
 ## Quick start (uv)
 
@@ -18,8 +18,9 @@ See [docs/DEV.md](docs/DEV.md) for CUDA/CPU notes, LAZ chip build, train/infer, 
 
 | Doc | Contents |
 |-----|----------|
+| [docs/TASK_GHENT_BROAD.md](docs/TASK_GHENT_BROAD.md) | Canopy v2 task: soft register, unknown mask, grid chips |
 | [docs/SPEC.md](docs/SPEC.md) | Goals, ML problem definition, architecture, milestones |
-| [docs/LABELS.md](docs/LABELS.md) | Partial inventory, training objective, strict vs audit eval |
+| [docs/LABELS.md](docs/LABELS.md) | Register as weak labels; audit primary, strict secondary |
 | [docs/DATA.md](docs/DATA.md) | LiDAR tiles, labels, CRS, splits, eligibility, versioning |
 | [docs/EVAL.md](docs/EVAL.md) | Peak extract, NMS, tree-level metrics, discoveries |
 | [docs/LEGAL.md](docs/LEGAL.md) | Attribution, redistribution, model card |

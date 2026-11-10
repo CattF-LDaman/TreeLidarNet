@@ -37,6 +37,11 @@ uv run treelidarnet data-write-split-meta
 uv run treelidarnet data-build-chips --laz-dir data/raw/laz --origins "200000,193000"
 uv run treelidarnet train --config configs/gent_bev_v1.yaml
 
+# Canopy v2 (broad tree finding, soft register + unknown mask):
+# uv run treelidarnet data-build-gent-grid --laz-dir data/raw/laz   # long; writes chips_index_full.parquet
+# uv run treelidarnet train --config configs/gent_canopy_v2.yaml    # loads gent_real_v1/best.pt via init_checkpoint
+# uv run treelidarnet train --config configs/gent_canopy_v2.yaml --resume
+
 # Checkpoints: `runs/<run_name>/latest.pt` (every 500 steps + each epoch + on Ctrl+C),
 # `best.pt` (lowest epoch-mean train loss). Resume:
 # uv run treelidarnet train --config configs/gent_bev_v1.yaml --run-name gent_real_v1 --resume
@@ -51,7 +56,8 @@ uv run ruff check treelidarnet tests
 ## Data layout
 
 - `data/raw/laz/` — downloaded LAZ (gitignored)
-- `data/processed/chips/` — training npz (gitignored)
+- `data/processed/chips/` — training npz (gitignored; do not commit). Rebuild after unknown-mask changes.
+- `data/manifests/chips_index_full.parquet` — full 50 m grid manifest from `data-build-gent-grid`
 - `data/manifests/split_meta.json` — edit kaartblad lists after `data-write-split-meta`
 
 ## Viewer
@@ -59,7 +65,7 @@ uv run ruff check treelidarnet tests
 City demo (after `infer-gent`):
 
 ```bash
-uv run treelidarnet infer-gent --checkpoint runs/gent_real_v1/best.pt
+uv run treelidarnet infer-gent --checkpoint runs/gent_canopy_v2/best.pt
 make viewer-serve   # http://127.0.0.1:8765/viewer/ghent.html
 ```
 

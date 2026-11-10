@@ -7,11 +7,9 @@
 - Private garden trees, many park understory trees, hedges, and woodland often have **no row**.
 - LiDAR (DHMV II, 2013–2015) sees **canopy** everywhere; labels mark **register locations** only.
 
-TreeLidarNet’s job is **not** “segment all vegetation.” It is:
+**Primary task (v2):** find **tree-like canopy in Gent** from DHMV II LiDAR — citywide peaks + scores ([TASK_GHENT_BROAD.md](TASK_GHENT_BROAD.md)).
 
-> **Find LiDAR evidence of trees at (or near) Gent register locations, and optionally flag plausible trees the register omits.**
-
-Product framing: **audit and augmentation** of open data — never a replacement census ([SPEC.md](SPEC.md) non-goals).
+**Secondary:** compare to Gent register for **audit** (discoveries OK) and **strict** benchmarks — never a replacement census ([SPEC.md](SPEC.md) non-goals).
 
 ---
 
@@ -23,9 +21,10 @@ Product framing: **audit and augmentation** of open data — never a replacement
 | **No “all canopy” mask** | We do not have full-tree labels; training on every green blob would need another data source |
 | **Positive chips** | Built where ≥1 eligible tree lies in the 50 m patch (`data-build-gent-chips`) |
 | **Negative chips** | Optional road/roof-heavy chips (spec §5.5) — avoid random park chips where **unlabeled trees** would punish true detections |
+| **Unknown mask (v2)** | No negative loss far from register peaks — unlisted canopy not punished |
 | **Loss ignore band** | Chip edges masked so uncertain context does not dominate |
 
-The model learns **register consistency under LiDAR**, biased toward street and municipal planting patterns in the label set.
+v1 learned register-only negatives; **v2 (canopy)** keeps register **positives** but uses an **unknown mask** so the model may fire on unlisted trees.
 
 ---
 

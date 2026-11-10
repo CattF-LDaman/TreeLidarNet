@@ -12,9 +12,10 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from treelidarnet.datasets.chip_dataset import ChipDataset, collate_chips
+from treelidarnet.datasets.chip_index import chip_paths_from_index
 from treelidarnet.models.gent_detector import GentTreeDetector
-from treelidarnet.models.losses import focal_loss_heatmap
-from treelidarnet.paths import chips_dir, manifests_dir, runs_dir
+from treelidarnet.models.losses import focal_loss_components
+from treelidarnet.paths import chips_dir, manifests_dir, repo_root, runs_dir
 
 
 def _device() -> torch.device:
@@ -99,17 +100,43 @@ def train_from_config(
     with config_path.open(encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     chip_glob = cfg.get("chip_glob", "*.npz")
-    paths = sorted(chips_dir().glob(chip_glob))
+    chips_index = cfg.get("chips_index")
+    if chips_index:
+        index_path = Path(chips_index)
+        if not index_path.is_absolute():
+            index_path = repo_root() / index_path
+        paths = chip_paths_from_index(index_path)
+    else:
+        paths = sorted(chips_dir().glob(chip_glob))
     if not paths:
-        raise FileNotFoundError(f"No chips matching {chip_glob} in {chips_dir()}")
+        raise FileNotFoundError(
+            f"No chips in {chips_dir()} (glob={chip_glob}, index={chips_index})"
+        )
+    loss_cfg = dict(cfg.get("loss") or {})
+    if "neg_beta" in loss_cfg and "beta" not in loss_cfg:
+        loss_cfg["beta"] = loss_cfg.pop("neg_beta")
     ds = ChipDataset(paths)
     in_ch = int(cfg.get("in_channels", 4))
     batch = int(cfg.get("batch_size", 2))
     epochs = int(cfg.get("epochs", 5))
     lr = float(cfg.get("lr", 1e-3))
     checkpoint_every_steps = int(cfg.get("checkpoint_every_steps", 500))
-    loader = DataLoader(ds, batch_size=batch, shuffle=True, collate_fn=collate_chips)
+    num_workers = int(cfg.get("num_workers", 0))
+    pin_memory = bool(cfg.get("pin_memory", False))
+    loader_kwargs: dict = {
+        "batch_size": batch,
+        "shuffle": True,
+        "collate_fn": collate_chips,
+        "num_workers": num_workers,
+        "pin_memory": pin_memory and torch.cuda.is_available(),
+    }
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = int(cfg.get("prefetch_factor", 2))
+    loader = DataLoader(ds, **loader_kwargs)
     device = _device()
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
     model = GentTreeDetector(in_channels=in_ch, base=int(cfg.get("base_channels", 32))).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     use_amp = device.type == "cuda"
@@ -123,6 +150,16 @@ def train_from_config(
     start_epoch = 0
     global_step = 0
     best_epoch_loss = float("inf")
+    init_ckpt = cfg.get("init_checkpoint")
+    if init_ckpt and not resume:
+        init_path = Path(init_ckpt)
+        if not init_path.is_absolute():
+            init_path = repo_root() / init_path
+        if init_path.is_file():
+            ck = torch.load(init_path, map_location=device, weights_only=False)
+            model.load_state_dict(ck["model"])
+            print(f"Loaded weights from {init_path}")
+
     if resume and latest_path.is_file():
         start_epoch, global_step, best_epoch_loss = load_training_checkpoint(
             latest_path, model=model, optimizer=opt, scaler=scaler, device=device
@@ -179,14 +216,24 @@ def train_from_config(
             total = 0.0
             last_pred = None
             last_target = None
+            non_block = device.type == "cuda" and pin_memory
             for batch_t in loader:
-                bev = batch_t["bev"].to(device)
-                target = batch_t["heatmap"].to(device)
-                ignore = batch_t["ignore"].to(device)
+                bev = batch_t["bev"].to(device, non_blocking=non_block)
+                target = batch_t["heatmap"].to(device, non_blocking=non_block)
+                ignore = batch_t["ignore"].to(device, non_blocking=non_block)
+                unknown = batch_t["unknown"].to(device, non_blocking=non_block)
+                hard_neg = batch_t["hard_negative"].to(device, non_blocking=non_block)
                 opt.zero_grad(set_to_none=True)
                 with torch.cuda.amp.autocast(enabled=use_amp):
                     pred = model(bev)
-                    loss = focal_loss_heatmap(pred, target, ignore)
+                    loss, pos_m, neg_m = focal_loss_components(
+                        pred,
+                        target,
+                        ignore,
+                        unknown=unknown,
+                        hard_negative=hard_neg,
+                        **loss_cfg,
+                    )
                 scaler.scale(loss).backward()
                 scaler.step(opt)
                 scaler.update()
@@ -203,6 +250,8 @@ def train_from_config(
                 global_step += 1
                 if writer:
                     writer.add_scalar("loss/train_step", loss_val, global_step)
+                    writer.add_scalar("loss/pos", float(pos_m.item()), global_step)
+                    writer.add_scalar("loss/neg", float(neg_m.item()), global_step)
                 last_pred = pred.detach().cpu()
                 last_target = target.detach().cpu()
                 if checkpoint_every_steps > 0 and global_step % checkpoint_every_steps == 0:

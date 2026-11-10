@@ -1,5 +1,5 @@
 /**
- * Map layers: Gent register (filled green) vs LiDAR model (hollow amber rings on top).
+ * Map layers: LiDAR model (amber rings) is the product; Gent register (green) is optional overlay.
  */
 window.TreeLidarMap = (function () {
   var GREEN = [52, 211, 153];

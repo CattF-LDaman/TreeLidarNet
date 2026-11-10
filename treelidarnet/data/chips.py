@@ -46,6 +46,30 @@ def chip_size_from_hw(h: int, w: int, cell_size_m: float) -> float:
     return max(h, w) * cell_size_m
 
 
+def make_unknown_mask(
+    tree_xy: list[tuple[float, float]],
+    *,
+    origin_x: float,
+    origin_y: float,
+    unknown_band_m: float = 12.0,
+    chip_size_m: float = CHIP_SIZE_M,
+    cell_size_m: float = CELL_SIZE_M,
+) -> np.ndarray:
+    """1 = unlabeled (no negative loss), 0 = near register (negatives allowed)."""
+    n = grid_cells(chip_size_m, cell_size_m)
+    if not tree_xy:
+        return np.ones((n, n), dtype=np.float32)
+    yy, xx = np.mgrid[0:n, 0:n]
+    cell_x = origin_x + (xx + 0.5) * cell_size_m
+    cell_y = origin_y + (yy + 0.5) * cell_size_m
+    band2 = unknown_band_m * unknown_band_m
+    min_d2 = np.full((n, n), np.inf, dtype=np.float64)
+    for tx, ty in tree_xy:
+        d2 = (cell_x - tx) ** 2 + (cell_y - ty) ** 2
+        min_d2 = np.minimum(min_d2, d2)
+    return (min_d2 > band2).astype(np.float32)
+
+
 def rasterize_heatmap(
     tree_xy: list[tuple[float, float]],
     *,

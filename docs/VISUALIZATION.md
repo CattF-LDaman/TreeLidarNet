@@ -100,7 +100,9 @@ For viewport-based loading, add a lightweight **`GET /inference/tiles?bbox=`** t
 
 ### City-scale LOD and loading contract
 
-Full Gent (~68k GT + tens of thousands of preds) cannot render as one scatter payload.
+**Gent demo (`viewer/ghent.html`, `ghent_live.html`):** full GT + prediction scatter in one bundle (HugATree / Luwe playground pattern) — amber rings are the **product**, green register is optional.
+
+For other municipalities or much larger runs, full-city scatter may be too heavy:
 
 | Zoom | Behavior |
 |------|----------|

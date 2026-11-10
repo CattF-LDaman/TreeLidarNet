@@ -14,9 +14,9 @@ Version 0.2 · Human-readable · Ghent pilot · PyTorch
 
 ### 2.1 What we are solving
 
-Given a patch of DHMV II point cloud (or a feature tensor derived from it), predict **where trees appear in LiDAR** in planimetric space — as **instance locations** (xy, optional height) with **confidence** — **aligned with Stad Gent’s municipal register** where labels exist, while treating **unlisted canopy** as discoveries at eval time, not training negatives.
+Given a patch of DHMV II point cloud (or a feature tensor derived from it), predict **where tree-like canopy appears in LiDAR** in planimetric space — **instance locations** (xy) with **confidence** — across **Ghent**, using the municipal register only as **soft positive** supervision (v2). Unlabeled canopy is **not** trained as negative ([TASK_GHENT_BROAD.md](TASK_GHENT_BROAD.md)).
 
-See [LABELS.md](LABELS.md) for partial inventory semantics and **strict vs audit** metrics.
+Register **strict / audit** metrics remain for sanity checks ([LABELS.md](LABELS.md)).
 
 ### 2.2 Why Gent first
 
@@ -27,10 +27,11 @@ See [LABELS.md](LABELS.md) for partial inventory semantics and **strict vs audit
 | DHMV II coverage | Full LiDAR over Gent (2013–2015 epoch) |
 | Error analysis | Link predictions to real tree profile pages (`/trees/<slug>/`) |
 
-### 2.3 What success looks like (v1)
+### 2.3 What success looks like
 
-- **Offline:** On a held-out **geographic test split**, match predictions to inventory points within **3 m** with **F1 ≥ 0.70** (tunable; document baseline vs model).
-- **Qualitative:** On a Deck.GL map, an informed viewer can see that predictions align with street trees and major park canopies without obvious striping artifacts.
+- **Primary (canopy v2):** Citywide inference with **credible discovery layer** (audit metrics + map QA); stable peaks in parks and streets without striping.
+- **Secondary:** Held-out **audit F1 @ 3 m** vs register; **strict F1** documented but not the north star.
+- **Qualitative:** Deck.GL map — predictions-first; register overlay optional (HugATree-style).
 - **Engineering:** Reproducible train/eval scripts; one command to run inference on a named chip and export map JSON.
 
 ### 2.4 Explicit non-goals (v1)

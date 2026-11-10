@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TreeLidarNet — Ghent smoke (200 chips)</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+  <style>
+    body { margin: 0; background: #0d1117; color: #e6edf3; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; z-index: 2; top: 1rem; left: 1rem;
+      background: rgba(13,17,23,0.88); padding: 1rem 1.1rem; border-radius: 0.5rem;
+      border: 1px solid rgba(255,255,255,0.12); max-width: 24rem; font-size: 0.8rem;
+      backdrop-filter: blur(8px);
+    }
+    .panel h1 { font-size: 1rem; margin: 0 0 0.35rem; color: #fbbf24; }
+    .panel .sub { color: #8b949e; margin-bottom: 0.6rem; line-height: 1.35; }
+    label { display: flex; align-items: center; gap: 0.4rem; margin: 0.25rem 0; cursor: pointer; }
+    #stats { margin-top: 0.6rem; color: #8b949e; font-size: 0.75rem; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="panel">
+    <h1>Ghent · canopy v2 smoke</h1>
+    <p class="sub">Epoch‑1 <code>best.pt</code>, 200 chips only. Amber = model; green = full register overlay (F1 not meaningful on slice).</p>
+    <label><input type="checkbox" id="show-gt" checked> Show register (green)</label>
+    <label><input type="checkbox" id="show-pred" checked> Show model (amber rings)</label>
+    <label><input type="checkbox" id="show-heat"> Model density heatmap</label>
+    <div id="stats">Loading…</div>
+  </div>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/deck.gl@9.2.7/dist.min.js"></script>
+  <script src="map_layers.js"></script>
+  <script src="ghent_smoke_map.js"></script>
+</body>
+</html>

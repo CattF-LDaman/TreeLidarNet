@@ -82,18 +82,22 @@
       var stRes = await fetch(LIVE + "status.json?t=" + Date.now());
       if (!stRes.ok) {
         stats.textContent =
-          "Start: uv run treelidarnet infer-gent --live --checkpoint runs/gent_real_v1/best.pt";
+          "Start: uv run treelidarnet infer-gent --live --checkpoint runs/gent_canopy_v2/best.pt";
         return;
       }
       var status = await stRes.json();
       prog.style.width = status.total ? (100 * status.done) / status.total + "%" : "0%";
-      var predRes = await fetch(LIVE + "predictions.json?t=" + (status.updated_at || ""));
+      var predRes = await fetch(LIVE + "predictions.json?t=" + (status.updated_at || Date.now()));
       if (predRes.ok) {
         var body = await predRes.text();
         if (body !== lastPredKey) {
           lastPredKey = body;
-          allPred = JSON.parse(body).predictions || [];
-          updateLayers();
+          var next = JSON.parse(body).predictions || [];
+          // Keep last rings if server briefly writes an empty partial (infer restart).
+          if (next.length > 0 || allPred.length === 0) {
+            allPred = next;
+            updateLayers();
+          }
         }
       }
       stats.innerHTML =
@@ -102,11 +106,11 @@
         status.done +
         "/" +
         status.total +
-        "<br><span style='color:#34d399'>" +
-        allGt.length.toLocaleString() +
-        " register</span> · <span style='color:#fbbf24'>" +
+        "<br><span style='color:#fbbf24'><b>" +
         allPred.length.toLocaleString() +
-        " model</span>";
+        " model</b></span> · <span style='color:#34d399'>" +
+        allGt.length.toLocaleString() +
+        " register</span>";
       if (status.state === "done" && pollTimer) {
         clearInterval(pollTimer);
         pollTimer = null;

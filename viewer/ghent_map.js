@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var DATA_URL = "../exports/inference/gent_city_gent_real_v1.json.gz";
+  var DATA_URL = "../exports/inference/gent_city_gent_canopy_v2.json.gz";
   var stats = document.getElementById("stats");
 
   var map = new maplibregl.Map({
@@ -32,17 +32,16 @@
     stats.innerHTML =
       "z" +
       z.toFixed(1) +
-      " · " +
-      allGt.length.toLocaleString() +
-      " GT · " +
+      " · <b>" +
       allPred.length.toLocaleString() +
-      " pred" +
+      "</b> model trees · " +
+      allGt.length.toLocaleString() +
+      " register" +
       (m
-        ? "<br>F1 <b>" +
-          m.f1_at_3m.toFixed(2) +
-          "</b> audit <b>" +
+        ? "<br>audit F1 <b>" +
           (m.f1_audit_at_3m || m.f1_at_3m).toFixed(2) +
-          "</b>"
+          "</b> · strict " +
+          m.f1_at_3m.toFixed(2)
         : "");
   }
 

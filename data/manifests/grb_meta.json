@@ -1,0 +1,16 @@
+{
+  "bbox": [
+    94545.98759129198,
+    185850.16162670963,
+    113723.56549687283,
+    205993.82822823245
+  ],
+  "buffer_m": 500.0,
+  "building_count": 1592,
+  "road_count": 38086,
+  "downloaded_at": "2026-11-10T14:22:56.591837+00:00",
+  "collections": {
+    "buildings": "IngeschetstGebouw",
+    "roads": "Wegsegment"
+  }
+}

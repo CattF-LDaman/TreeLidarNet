@@ -13,8 +13,10 @@ from treelidarnet.data.chips import (
     chip_id,
     grid_cells,
     make_ignore_mask,
+    make_unknown_mask,
     rasterize_heatmap,
 )
+from treelidarnet.data.grb import GrbIndex, make_hard_negative_mask
 from treelidarnet.data.ground import height_above_ground
 from treelidarnet.data.laz_io import read_laz_bbox
 from treelidarnet.paths import chips_dir, manifests_dir
@@ -40,6 +42,7 @@ def build_chip(
     trees_df: pd.DataFrame,
     dtm_path: Path | None,
     out_dir: Path | None = None,
+    grb_index: GrbIndex | None = None,
 ) -> tuple[Path, dict]:
     out_dir = out_dir or chips_dir()
     x1, y1 = x0 + CHIP_SIZE_M, y0 + CHIP_SIZE_M
@@ -50,6 +53,10 @@ def build_chip(
     tree_xy = list(zip(chip_trees["x"].tolist(), chip_trees["y"].tolist(), strict=False))
     heatmap = rasterize_heatmap(tree_xy, origin_x=x0, origin_y=y0)
     ignore = make_ignore_mask(n, n)
+    unknown = make_unknown_mask(tree_xy, origin_x=x0, origin_y=y0)
+    hard_negative = make_hard_negative_mask(
+        grb_index, origin_x=x0, origin_y=y0, heatmap=heatmap
+    )
     if len(xyz):
         local = xyz.copy()
         local[:, 0] -= x0
@@ -66,6 +73,8 @@ def build_chip(
         feat=feat.astype(np.float32),
         heatmap=heatmap,
         ignore=ignore,
+        unknown=unknown,
+        hard_negative=hard_negative,
         origin=np.array([x0, y0], dtype=np.float64),
     )
     pts_per_m2 = len(xyz) / (CHIP_SIZE_M * CHIP_SIZE_M) if len(xyz) else 0.0
@@ -90,6 +99,7 @@ def build_chips_for_origins(
     trees_parquet: Path,
     dtm_path: Path | None,
     index_out: Path | None = None,
+    grb_index: GrbIndex | None = None,
 ) -> pd.DataFrame:
     trees_df = pd.read_parquet(trees_parquet)
     rows = []
@@ -100,6 +110,7 @@ def build_chips_for_origins(
             laz_paths=laz_paths,
             trees_df=trees_df,
             dtm_path=dtm_path,
+            grb_index=grb_index,
         )
         rows.append(meta)
     idx = pd.DataFrame(rows)

@@ -108,3 +108,28 @@ def match_detections(
         matched_mean_dist_m=mean_d,
         discoveries=discoveries,
     )
+
+
+def discovery_candidates(
+    preds: list[Detection],
+    gts: list[GroundTruth],
+    *,
+    discovery_distance_m: float = 5.0,
+) -> list[Detection]:
+    """Predictions farther than discovery_distance_m from every GT."""
+    disc_r2 = discovery_distance_m * discovery_distance_m
+    out: list[Detection] = []
+    for pred in preds:
+        if not any(_dist2(pred, gt) <= disc_r2 for gt in gts):
+            out.append(pred)
+    return out
+
+
+def bbox_area_km2(preds: list[Detection], *, padding_m: float = 100.0) -> float:
+    if not preds:
+        return 0.0
+    xs = [p.x for p in preds]
+    ys = [p.y for p in preds]
+    w = max(xs) - min(xs) + 2 * padding_m
+    h = max(ys) - min(ys) + 2 * padding_m
+    return (w * h) / 1e6

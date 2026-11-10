@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 
 from treelidarnet.data.chips import CELL_SIZE_M, chip_id
 from treelidarnet.datasets.chip_dataset import ChipDataset, collate_chips
+from treelidarnet.datasets.chip_index import chip_paths_from_index
 from treelidarnet.eval import load_ground_truths
 from treelidarnet.export_mapjson import export_city_gz
 from treelidarnet.infer import load_model
@@ -25,15 +26,19 @@ def infer_gent_city(
     checkpoint: Path,
     trees_parquet: Path,
     export_path: Path | None = None,
-    model_id: str = "gent_real_v1",
+    model_id: str = "gent_canopy_v2",
     batch_size: int = 8,
     limit: int | None = None,
     chip_glob: str = "*.npz",
+    chips_index: Path | None = None,
     live: bool = False,
     live_flush_every: int = 150,
     progress_every: int = 50,
 ) -> Path:
-    paths = sorted(chips_dir().glob(chip_glob))
+    if chips_index is not None and chips_index.is_file():
+        paths = chip_paths_from_index(chips_index)
+    else:
+        paths = sorted(chips_dir().glob(chip_glob))
     if not paths:
         raise FileNotFoundError(f"No chips in {chips_dir()}")
     if limit is not None:
@@ -68,6 +73,8 @@ def infer_gent_city(
 
     chip_detections: list[tuple[str, list[Detection]]] = []
     idx = 0
+    live_pred_count = 0
+    last_live_flush = 0
     for batch in loader:
         bev = batch["bev"].to(device)
         with torch.no_grad():
@@ -90,20 +97,32 @@ def infer_gent_city(
         done = idx
         if progress_every > 0 and (done % progress_every == 0 or done == len(paths)):
             print(f"infer chips {done}/{len(paths)}", flush=True)
-        if live_dir is not None and done > 0 and (
-            done % live_flush_every == 0 or done == len(paths)
-        ):
-            partial = merge_chip_detections(chip_detections, radius_m=2.5)
-            write_live_predictions(live_dir / "predictions.json", partial)
-            write_status(
-                live_dir / "status.json",
-                state="running" if done < len(paths) else "merging",
-                done=done,
-                total=len(paths),
-                pred_count=len(partial),
-                model_id=model_id,
-            )
-            print(f"  live flush {done}/{len(paths)} preds={len(partial)}", flush=True)
+            if live_dir is not None:
+                write_status(
+                    live_dir / "status.json",
+                    state="running",
+                    done=done,
+                    total=len(paths),
+                    pred_count=live_pred_count,
+                    model_id=model_id,
+                )
+        # Flush when crossing each live_flush_every boundary (batch steps may skip exact multiples).
+        if live_dir is not None and done > 0:
+            crossed = done // live_flush_every > last_live_flush // live_flush_every
+            if crossed or done == len(paths):
+                partial = merge_chip_detections(chip_detections, radius_m=2.5)
+                live_pred_count = len(partial)
+                last_live_flush = done
+                write_live_predictions(live_dir / "predictions.json", partial)
+                write_status(
+                    live_dir / "status.json",
+                    state="running" if done < len(paths) else "merging",
+                    done=done,
+                    total=len(paths),
+                    pred_count=live_pred_count,
+                    model_id=model_id,
+                )
+                print(f"  live flush {done}/{len(paths)} preds={live_pred_count}", flush=True)
 
     merged = merge_chip_detections(chip_detections, radius_m=2.5)
     print(f"merged predictions: {len(merged)}", flush=True)
@@ -126,7 +145,11 @@ def infer_gent_city(
         metrics=metrics,
         chip_count=len(paths),
     )
-    print(f"metrics strict F1={metrics.f1:.3f} audit F1={metrics.f1_audit:.3f}", flush=True)
+    print(
+        f"metrics audit F1={metrics.f1_audit:.3f} strict F1={metrics.f1:.3f} "
+        f"discoveries={metrics.discoveries}",
+        flush=True,
+    )
     print(f"export: {export_path}", flush=True)
     if live_dir is not None:
         write_live_predictions(live_dir / "predictions.json", merged)

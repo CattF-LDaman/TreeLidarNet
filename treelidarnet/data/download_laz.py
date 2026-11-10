@@ -19,7 +19,9 @@ LAYER = "LiDAR_DHMV_II_LAZtiles"
 _LAZ_PATH_RE = re.compile(r"(LiDAR_DHMV_2[^\s<\"]+\.laz)", re.I)
 
 
-def tile_corners_for_bbox(xmin: float, ymin: float, xmax: float, ymax: float, *, step: int = 500) -> list[tuple[int, int]]:
+def tile_corners_for_bbox(
+    xmin: float, ymin: float, xmax: float, ymax: float, *, step: int = 500
+) -> list[tuple[int, int]]:
     x0 = int(xmin // step) * step
     y0 = int(ymin // step) * step
     x1 = int(xmax // step) * step

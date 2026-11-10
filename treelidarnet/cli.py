@@ -10,8 +10,11 @@ from pathlib import Path
 from treelidarnet.baseline.chm import chm_peaks_for_paths
 from treelidarnet.data.build_chips import build_chips_for_origins, discover_laz_dir
 from treelidarnet.data.build_gent import build_gent_chips
+from treelidarnet.data.build_gent_grid import build_gent_grid_chips
+from treelidarnet.data.download_grb import download_gent_grb
 from treelidarnet.data.download_laz import download_gent_laz
 from treelidarnet.data.import_gent import DEFAULT_EXPORT_URL, import_gent_geojson
+from treelidarnet.data.patch_grb_masks import patch_chips_grb
 from treelidarnet.data.split import (
     init_split_meta_from_example,
     load_split_meta,
@@ -63,7 +66,41 @@ def _cmd_data_download_laz(args: argparse.Namespace) -> int:
 
 def _cmd_data_build_gent_chips(args: argparse.Namespace) -> int:
     dtm = Path(args.dtm) if args.dtm else None
+    grb_dir = Path(args.grb_dir) if args.grb_dir else None
     build_gent_chips(
+        trees_parquet=Path(args.trees),
+        laz_dir=Path(args.laz_dir),
+        dtm_path=dtm,
+        limit=int(args.limit) if args.limit else None,
+        grb_dir=grb_dir,
+        road_buffer_m=float(args.road_buffer_m),
+    )
+    return 0
+
+
+def _cmd_data_download_grb(args: argparse.Namespace) -> int:
+    meta = download_gent_grb(
+        trees_parquet=Path(args.trees),
+        dest_dir=Path(args.dest),
+        buffer_m=float(args.buffer_m),
+    )
+    print(json.dumps(meta, indent=2))
+    return 0
+
+
+def _cmd_data_patch_chips_grb(args: argparse.Namespace) -> int:
+    patch_chips_grb(
+        grb_dir=Path(args.grb_dir),
+        index_parquet=Path(args.index) if args.index else None,
+        road_buffer_m=float(args.road_buffer_m),
+        limit=int(args.limit) if args.limit else None,
+    )
+    return 0
+
+
+def _cmd_data_build_gent_grid(args: argparse.Namespace) -> int:
+    dtm = Path(args.dtm) if args.dtm else None
+    build_gent_grid_chips(
         trees_parquet=Path(args.trees),
         laz_dir=Path(args.laz_dir),
         dtm_path=dtm,
@@ -122,8 +159,18 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         for p in pred_data["predictions"]
     ]
     gts = load_ground_truths(Path(args.trees))
-    out = eval_detections(preds, gts, run_id=args.run_id, split=args.split)
+    discoveries = Path(args.export_discoveries) if args.export_discoveries else None
+    out = eval_detections(
+        preds,
+        gts,
+        run_id=args.run_id,
+        split=args.split,
+        task=args.task,
+        export_discoveries=discoveries,
+    )
     print(f"Metrics: {out}")
+    if discoveries:
+        print(f"Discoveries GeoJSON: {discoveries}")
     return 0
 
 
@@ -140,6 +187,9 @@ def _cmd_infer(args: argparse.Namespace) -> int:
 
 
 def _cmd_infer_gent(args: argparse.Namespace) -> int:
+    chips_index = Path(args.chips_index) if args.chips_index else None
+    if chips_index is not None and not chips_index.is_file():
+        chips_index = None
     out = infer_gent_city(
         checkpoint=Path(args.checkpoint),
         trees_parquet=Path(args.trees),
@@ -147,6 +197,7 @@ def _cmd_infer_gent(args: argparse.Namespace) -> int:
         model_id=args.model_id,
         batch_size=int(args.batch_size),
         limit=int(args.limit) if args.limit else None,
+        chips_index=chips_index,
         live=args.live,
         live_flush_every=int(args.live_flush_every),
         progress_every=int(args.progress_every),
@@ -185,7 +236,35 @@ def main(argv: list[str] | None = None) -> int:
     p_bg.add_argument("--laz-dir", default="data/raw/laz")
     p_bg.add_argument("--dtm", default=None)
     p_bg.add_argument("--limit", default=None)
+    p_bg.add_argument("--grb-dir", default=None, help="data/raw/grb if GeoJSON present")
+    p_bg.add_argument("--road-buffer-m", default="2.0")
     p_bg.set_defaults(func=_cmd_data_build_gent_chips)
+
+    p_grb_dl = sub.add_parser("data-download-grb", help="GRB buildings+roads GeoJSON for Gent bbox")
+    p_grb_dl.add_argument("--trees", default=str(manifests_dir() / "gent_trees.parquet"))
+    p_grb_dl.add_argument("--dest", default="data/raw/grb")
+    p_grb_dl.add_argument("--buffer-m", default="500")
+    p_grb_dl.set_defaults(func=_cmd_data_download_grb)
+
+    p_grb_patch = sub.add_parser(
+        "data-patch-chips-grb",
+        help="Rewrite hard_negative in existing chips from GRB GeoJSON",
+    )
+    p_grb_patch.add_argument("--grb-dir", default="data/raw/grb")
+    p_grb_patch.add_argument("--index", default=None)
+    p_grb_patch.add_argument("--road-buffer-m", default="2.0")
+    p_grb_patch.add_argument("--limit", default=None)
+    p_grb_patch.set_defaults(func=_cmd_data_patch_chips_grb)
+
+    p_grid = sub.add_parser(
+        "data-build-gent-grid",
+        help="50 m grid chips over Gent bbox → chips_index_full.parquet",
+    )
+    p_grid.add_argument("--trees", default=str(manifests_dir() / "gent_trees.parquet"))
+    p_grid.add_argument("--laz-dir", default="data/raw/laz")
+    p_grid.add_argument("--dtm", default=None)
+    p_grid.add_argument("--limit", default=None)
+    p_grid.set_defaults(func=_cmd_data_build_gent_grid)
 
     p_chips = sub.add_parser("data-build-chips", help="Build npz chips from LAZ")
     p_chips.add_argument("--laz-dir", required=True)
@@ -224,6 +303,12 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--trees", default=str(manifests_dir() / "gent_trees.parquet"))
     p_eval.add_argument("--run-id", default="eval_run")
     p_eval.add_argument("--split", default="test")
+    p_eval.add_argument("--task", default="ghent_canopy_detection")
+    p_eval.add_argument(
+        "--export-discoveries",
+        default=None,
+        help="Optional GeoJSON path (e.g. exports/discoveries_run.geojson)",
+    )
     p_eval.set_defaults(func=_cmd_eval)
 
     p_infer = sub.add_parser("infer", help="Infer one chip")
@@ -237,11 +322,16 @@ def main(argv: list[str] | None = None) -> int:
     p_city = sub.add_parser("infer-gent", help="Infer all chips → city map JSON.gz")
     p_city.add_argument(
         "--checkpoint",
-        default=str(repo_root() / "runs/gent_real_v1/best.pt"),
+        default=str(repo_root() / "runs/gent_canopy_v2/best.pt"),
     )
     p_city.add_argument("--trees", default=str(manifests_dir() / "gent_trees.parquet"))
     p_city.add_argument("--export", default=None)
-    p_city.add_argument("--model-id", default="gent_real_v1")
+    p_city.add_argument("--model-id", default="gent_canopy_v2")
+    p_city.add_argument(
+        "--chips-index",
+        default=str(manifests_dir() / "chips_index_full.parquet"),
+        help="Manifest parquet; omit file to use all *.npz in chips dir",
+    )
     p_city.add_argument("--batch-size", default="8")
     p_city.add_argument("--limit", default=None, help="Max chips (smoke test)")
     p_city.add_argument(

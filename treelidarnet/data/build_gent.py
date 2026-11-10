@@ -10,7 +10,8 @@ import pandas as pd
 
 from treelidarnet.data.build_chips import build_chip
 from treelidarnet.data.chips import CHIP_SIZE_M
-from treelidarnet.paths import chips_dir, manifests_dir
+from treelidarnet.data.grb import GrbIndex
+from treelidarnet.paths import data_dir, manifests_dir
 
 
 def index_laz_files(laz_dir: Path) -> dict[tuple[int, int], Path]:
@@ -45,6 +46,8 @@ def build_gent_chips(
     laz_dir: Path,
     dtm_path: Path | None = None,
     limit: int | None = None,
+    grb_dir: Path | None = None,
+    road_buffer_m: float = 2.0,
 ) -> pd.DataFrame:
     index = index_laz_files(laz_dir)
     if not index:
@@ -53,6 +56,14 @@ def build_gent_chips(
     if limit:
         origins = origins[:limit]
     trees_df = pd.read_parquet(trees_parquet)
+    grb_index: GrbIndex | None = None
+    if grb_dir is None:
+        default_grb = data_dir() / "raw" / "grb"
+        if (default_grb / "gent_grb_buildings.geojson").is_file():
+            grb_dir = default_grb
+    if grb_dir is not None:
+        grb_index = GrbIndex.from_dir(grb_dir, road_buffer_m=road_buffer_m)
+        print(f"GRB hard negatives: {grb_dir}", flush=True)
     rows = []
     skipped = 0
     for i, (x0, y0) in enumerate(origins, 1):
@@ -66,6 +77,7 @@ def build_gent_chips(
             laz_paths=laz_paths,
             trees_df=trees_df,
             dtm_path=dtm_path,
+            grb_index=grb_index,
         )
         rows.append(meta)
         if i % 200 == 0:

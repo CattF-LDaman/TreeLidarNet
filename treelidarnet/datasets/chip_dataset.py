@@ -31,6 +31,16 @@ class ChipDataset(Dataset):
             feat[:, 2] = feat[:, 2] / 31.0
         heatmap = torch.from_numpy(data["heatmap"].astype(np.float32))
         ignore = torch.from_numpy(data["ignore"].astype(np.float32))
+        if "unknown" in data:
+            unknown = torch.from_numpy(data["unknown"].astype(np.float32))
+        else:
+            # Legacy chips: treat low-heatmap cells as unlabeled (canopy v2 fallback).
+            heat_np = data["heatmap"].astype(np.float32)
+            unknown = torch.from_numpy((heat_np < 0.05).astype(np.float32))
+        if "hard_negative" in data:
+            hard_negative = torch.from_numpy(data["hard_negative"].astype(np.float32))
+        else:
+            hard_negative = torch.zeros_like(heatmap)
         if xyz.shape[0] == 0:
             bev = torch.zeros(feat.shape[1] + 1, self.grid_size, self.grid_size)
         else:
@@ -44,6 +54,8 @@ class ChipDataset(Dataset):
             "bev": bev,
             "heatmap": heatmap.unsqueeze(0),
             "ignore": ignore.unsqueeze(0),
+            "unknown": unknown.unsqueeze(0),
+            "hard_negative": hard_negative.unsqueeze(0),
         }
 
 
@@ -52,4 +64,6 @@ def collate_chips(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tenso
         "bev": torch.stack([b["bev"] for b in batch]),
         "heatmap": torch.stack([b["heatmap"] for b in batch]),
         "ignore": torch.stack([b["ignore"] for b in batch]),
+        "unknown": torch.stack([b["unknown"] for b in batch]),
+        "hard_negative": torch.stack([b["hard_negative"] for b in batch]),
     }

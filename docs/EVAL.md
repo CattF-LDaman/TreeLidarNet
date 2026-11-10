@@ -14,10 +14,10 @@ Defines how model outputs become **detections**, how overlapping chips merge, an
 | Match | Deduped preds + eligible GT | TP / FP / FN / discoveries |
 | Report | Match sets | JSON + stratified tables |
 
-Primary success metrics (report **both** — see [LABELS.md](LABELS.md)):
+Primary success metrics ([TASK_GHENT_BROAD.md](TASK_GHENT_BROAD.md), [LABELS.md](LABELS.md)):
 
-- **Strict F1 @ 3 m** — benchmark against the register (unlisted trees hurt precision).
-- **Audit F1 @ 3 m** — discoveries (>5 m from any GT) excluded from FP.
+- **Audit F1 @ 3 m** (primary) — discoveries (>5 m from any GT) excluded from FP; **discovery count**; **pred_per_km2**.
+- **Strict F1 @ 3 m** (secondary) — benchmark against the register.
 
 Eval JSON uses `tree_level_strict` and `tree_level_audit` (`treelidarnet/eval.py`).
 
