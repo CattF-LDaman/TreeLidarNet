@@ -139,12 +139,15 @@ def train_from_config(
     per_tree_weight = float(loss_cfg.pop("per_tree_weight", 0.0))
     per_tree_radius_m = float(loss_cfg.pop("per_tree_radius_m", 2.0))
     per_tree_radius_px = max(1, int(round(per_tree_radius_m / CELL_SIZE_M)))
+    grad_clip = float(cfg.get("grad_clip_norm") or 0.0)
     if per_tree_weight > 0:
         print(
             f"Per-tree peak loss weight={per_tree_weight} radius={per_tree_radius_m} m "
             f"({per_tree_radius_px} px)",
             flush=True,
         )
+    if grad_clip > 0:
+        print(f"Grad clip max_norm={grad_clip}", flush=True)
     ds = ChipDataset(paths)
     in_ch = int(cfg.get("in_channels", 4))
     batch = int(cfg.get("batch_size", 2))
@@ -299,36 +302,41 @@ def train_from_config(
                 opt.zero_grad(set_to_none=True)
                 with torch.cuda.amp.autocast(enabled=use_amp):
                     pred = model(bev)
-                    loss, pos_m, neg_m = focal_loss_components(
+                # Loss stays fp32. A confident fp16 sigmoid is exactly 1, and
+                # -log(1 - pred) is then NaN (this killed epoch 3 at step 76511).
+                loss, pos_m, neg_m = focal_loss_components(
+                    pred,
+                    target,
+                    ignore,
+                    unknown=unknown,
+                    hard_negative=hard_neg,
+                    **loss_cfg,
+                )
+                tree_m = pred.sum() * 0.0
+                if per_tree_weight > 0:
+                    tree_m = per_tree_peak_loss(
                         pred,
                         target,
                         ignore,
-                        unknown=unknown,
-                        hard_negative=hard_neg,
-                        **loss_cfg,
+                        alpha=float(loss_cfg.get("alpha", 2.0)),
+                        radius_px=per_tree_radius_px,
                     )
-                    tree_m = pred.sum() * 0.0
-                    if per_tree_weight > 0:
-                        tree_m = per_tree_peak_loss(
-                            pred,
-                            target,
-                            ignore,
-                            alpha=float(loss_cfg.get("alpha", 2.0)),
-                            radius_px=per_tree_radius_px,
-                        )
-                        loss = loss + per_tree_weight * tree_m
-                scaler.scale(loss).backward()
-                scaler.step(opt)
-                scaler.update()
-                loss_val = float(loss.item())
-                if not (loss_val == loss_val and loss_val < 1e6):
+                    loss = loss + per_tree_weight * tree_m
+                if not torch.isfinite(loss):
                     msg = (
-                        f"Training stopped: bad loss {loss_val}"
+                        f"Training stopped: bad loss {float(loss.detach())}"
                         f" at epoch {epoch + 1} step {global_step + 1}"
                     )
                     if writer:
                         writer.close()
                     raise RuntimeError(msg)
+                scaler.scale(loss).backward()
+                if grad_clip > 0:
+                    scaler.unscale_(opt)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                scaler.step(opt)
+                scaler.update()
+                loss_val = float(loss.item())
                 total += loss_val
                 global_step += 1
                 if writer:

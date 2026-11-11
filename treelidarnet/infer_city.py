@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 
 from treelidarnet.data.chips import CELL_SIZE_M, chip_id
 from treelidarnet.datasets.chip_dataset import ChipDataset, collate_chips
-from treelidarnet.datasets.chip_index import chip_paths_from_index
+from treelidarnet.datasets.chip_index import chip_paths_outward_from_index, order_paths_outward
 from treelidarnet.eval import load_ground_truths
 from treelidarnet.export_mapjson import export_city_gz
 from treelidarnet.infer import load_model
@@ -42,11 +42,16 @@ def infer_gent_city(
     score_threshold: float = DEFAULT_PEAK_SCORE_THRESHOLD,
 ) -> Path:
     if chips_index is not None and chips_index.is_file():
-        paths = chip_paths_from_index(chips_index)
+        paths, center = chip_paths_outward_from_index(chips_index)
     else:
-        paths = sorted(chips_dir().glob(chip_glob))
+        paths, center = order_paths_outward(sorted(chips_dir().glob(chip_glob)))
     if not paths:
         raise FileNotFoundError(f"No chips in {chips_dir()}")
+    if center is not None:
+        print(
+            f"infer order: outward from ({center[0]:.0f}, {center[1]:.0f})",
+            flush=True,
+        )
     if limit is not None:
         paths = paths[:limit]
 

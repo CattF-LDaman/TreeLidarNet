@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from treelidarnet.data.build_chips import _trees_in_chip
-from treelidarnet.data.chips import CHIP_SIZE_M, heatmap_sigma_m, rasterize_heatmap
+from treelidarnet.data.chips import (
+    CHIP_SIZE_M,
+    heatmap_sigma_m,
+    make_unknown_mask,
+    rasterize_heatmap,
+)
 from treelidarnet.data.grb import GrbIndex, make_hard_negative_mask
+from treelidarnet.datasets.chip_index import tree_counts_by_chip_id
 from treelidarnet.paths import chips_dir, data_dir
 
 
@@ -31,6 +36,51 @@ def _tree_targets(chip_trees: pd.DataFrame) -> list[tuple[float, float, float]]:
         (float(r["x"]), float(r["y"]), heatmap_sigma_m(r.get("stamomtrek")))
         for r in chip_trees.to_dict("records")
     ]
+
+
+def patch_chips_unknown_band(
+    *,
+    trees_parquet: Path,
+    index_parquet: Path,
+    unknown_band_m: float = 5.0,
+    limit: int | None = None,
+) -> int:
+    """Rewrite the unknown mask on chips that contain a register tree.
+
+    Empty chips are already fully unknown. Heatmaps and LiDAR are left as they are.
+    """
+    trees_df = pd.read_parquet(trees_parquet)
+    counts = tree_counts_by_chip_id(index_parquet)
+    chip_ids = sorted(cid for cid, n in counts.items() if n > 0)
+    if limit is not None:
+        chip_ids = chip_ids[:limit]
+    root = chips_dir()
+    patched = 0
+    for i, cid in enumerate(chip_ids, 1):
+        path = root / f"{cid}.npz"
+        if not path.is_file():
+            continue
+        with np.load(path) as data:
+            arrays = {k: data[k] for k in data.files}
+        x0 = float(arrays["origin"][0])
+        y0 = float(arrays["origin"][1])
+        chip_trees = _trees_in_chip(trees_df, x0, y0, CHIP_SIZE_M)
+        tree_xy = [(float(r["x"]), float(r["y"])) for r in chip_trees.to_dict("records")]
+        arrays["unknown"] = make_unknown_mask(
+            tree_xy,
+            origin_x=x0,
+            origin_y=y0,
+            unknown_band_m=unknown_band_m,
+        )
+        _atomic_save_npz(path, arrays)
+        patched += 1
+        if i % 500 == 0:
+            print(f"patched unknown {i}/{len(chip_ids)}", flush=True)
+    print(
+        f"Done patching unknown band {unknown_band_m} m on {patched} chips",
+        flush=True,
+    )
+    return patched
 
 
 def patch_chips_heatmaps(

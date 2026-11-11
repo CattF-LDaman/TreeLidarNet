@@ -13,6 +13,9 @@ pin_memory: true
 prefetch_factor: 2
 epochs: 10
 lr: 0.0003
+# Per-tree focal on a missed stake is a large gradient. Cap it so one batch
+# cannot blow up Adam. Normal steps are far below this.
+grad_clip_norm: 5.0
 checkpoint_every_steps: 500
 
 # Full grid is ~8% register-positive chips; oversample so training focuses on tree targets.
@@ -23,18 +26,20 @@ sampler:
 # Fine-tune from register v1: uv run treelidarnet train --config configs/gent_canopy_v2.yaml --resume
 # (loads runs/gent_canopy_v2/latest.pt if present; copy gent_real_v1/best.pt meta optional)
 
-# Restart after epoch 2 with --resume. The live process does not see this until then.
-# resume_weights_only drops Adam state because per-tree loss is a different scale.
-resume_weights_only: true
+# Cutover already happened. Resume keeps Adam so a pause does not cold-start the epoch.
+resume_weights_only: false
 
 loss:
   alpha: 2.0
   neg_beta: 1.0
   neg_beta_hard: 4.0
-  # ~0.01 keeps this beside the grid loss. Weight 1 would be hundreds of times larger.
+  # 0.01 so a missed stake can move the weights. The loss itself is fp32:
+  # fp16 rounded a saturated score to 1 and the next step became NaN.
   per_tree_weight: 0.01
   per_tree_radius_m: 2.0
-unknown_band_m: 12.0
+# Stored in each chip's unknown array (not read at train time). 5 m leaves
+# front-garden trees just outside the stake unlabeled. Patched 11 Nov 2026.
+unknown_band_m: 5.0
 
 grb:
   dir: data/raw/grb

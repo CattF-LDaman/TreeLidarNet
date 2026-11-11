@@ -2,8 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 import torch
 import torch.nn.functional as F
+
+# fp16 cannot represent 1 - 1e-4 (it rounds to 1). A saturated sigmoid then
+# makes -log(1 - pred) NaN. Loss math always runs in fp32.
+_PROB_EPS = 1e-4
+
+
+@contextmanager
+def _fp32_loss(pred: torch.Tensor) -> Iterator[None]:
+    device_type = pred.device.type if pred.device.type in {"cuda", "cpu"} else "cpu"
+    with torch.amp.autocast(device_type, enabled=False):
+        yield
 
 
 def focal_loss_heatmap(
@@ -18,7 +32,31 @@ def focal_loss_heatmap(
     neg_beta_hard: float = 4.0,
 ) -> torch.Tensor:
     """CenterNet-style focal loss; unknown mask skips negatives (canopy v2)."""
-    pred = pred.clamp(1e-4, 1 - 1e-4)
+    with _fp32_loss(pred):
+        return _focal_loss_heatmap(
+            pred.float(),
+            target.float(),
+            None if ignore is None else ignore.float(),
+            None if unknown is None else unknown.float(),
+            None if hard_negative is None else hard_negative.float(),
+            alpha=alpha,
+            beta=beta,
+            neg_beta_hard=neg_beta_hard,
+        )
+
+
+def _focal_loss_heatmap(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    ignore: torch.Tensor | None,
+    unknown: torch.Tensor | None,
+    hard_negative: torch.Tensor | None,
+    *,
+    alpha: float,
+    beta: float,
+    neg_beta_hard: float,
+) -> torch.Tensor:
+    pred = pred.clamp(_PROB_EPS, 1.0 - _PROB_EPS)
     pos = target >= 0.99
     neg = ~pos
     pos_loss = -torch.log(pred) * torch.pow(1 - pred, alpha) * pos
@@ -51,12 +89,33 @@ def focal_loss_components(
     **kwargs: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return total, pos_mean, neg_mean for TensorBoard."""
-    pred = pred.clamp(1e-4, 1 - 1e-4)
+    with _fp32_loss(pred):
+        return _focal_loss_components(
+            pred.float(),
+            target.float(),
+            None if ignore is None else ignore.float(),
+            None if unknown is None else unknown.float(),
+            None if hard_negative is None else hard_negative.float(),
+            alpha=float(kwargs.get("alpha", 2.0)),
+            beta=float(kwargs.get("beta", 4.0)),
+            neg_beta_hard=float(kwargs.get("neg_beta_hard", 4.0)),
+        )
+
+
+def _focal_loss_components(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    ignore: torch.Tensor | None,
+    unknown: torch.Tensor | None,
+    hard_negative: torch.Tensor | None,
+    *,
+    alpha: float,
+    beta: float,
+    neg_beta_hard: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    pred = pred.clamp(_PROB_EPS, 1.0 - _PROB_EPS)
     pos = target >= 0.99
     neg = ~pos
-    alpha = float(kwargs.get("alpha", 2.0))
-    beta = float(kwargs.get("beta", 4.0))
-    neg_beta_hard = float(kwargs.get("neg_beta_hard", 4.0))
     pos_loss = -torch.log(pred) * torch.pow(1 - pred, alpha) * pos
     neg_weight = torch.pow(1 - target, beta)
     neg_loss = -torch.log(1 - pred) * torch.pow(pred, alpha) * neg_weight * neg
@@ -99,16 +158,20 @@ def per_tree_peak_loss(
     Peaks are local maxima of the Gaussian target (one per register tree). Averaged
     over trees so a missed stake is not diluted by the rest of the grid.
     """
-    pred = pred.clamp(1e-4, 1 - 1e-4)
-    peak_k = 3
-    target_pool = F.max_pool2d(target, peak_k, stride=1, padding=peak_k // 2)
-    is_peak = (target >= min_target) & (target >= target_pool - 1e-6)
-    if ignore is not None:
-        is_peak = is_peak & (ignore < 1)
-    radius_px = max(1, int(radius_px))
-    window = radius_px * 2 + 1
-    pred_pool = F.max_pool2d(pred, window, stride=1, padding=radius_px)
-    peak_pred = pred_pool[is_peak]
-    if peak_pred.numel() == 0:
-        return pred.sum() * 0.0
-    return (-torch.log(peak_pred) * torch.pow(1 - peak_pred, alpha)).mean()
+    with _fp32_loss(pred):
+        pred = pred.float().clamp(_PROB_EPS, 1.0 - _PROB_EPS)
+        target = target.float()
+        if ignore is not None:
+            ignore = ignore.float()
+        peak_k = 3
+        target_pool = F.max_pool2d(target, peak_k, stride=1, padding=peak_k // 2)
+        is_peak = (target >= min_target) & (target >= target_pool - 1e-6)
+        if ignore is not None:
+            is_peak = is_peak & (ignore < 1)
+        radius_px = max(1, int(radius_px))
+        window = radius_px * 2 + 1
+        pred_pool = F.max_pool2d(pred, window, stride=1, padding=radius_px)
+        peak_pred = pred_pool[is_peak]
+        if peak_pred.numel() == 0:
+            return pred.sum() * 0.0
+        return (-torch.log(peak_pred) * torch.pow(1 - peak_pred, alpha)).mean()

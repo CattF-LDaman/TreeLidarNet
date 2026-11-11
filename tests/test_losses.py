@@ -28,6 +28,18 @@ def test_per_tree_peak_loss_penalizes_a_missed_stake():
     assert float(miss.item()) > float(hit.item())
 
 
+def test_saturated_prediction_stays_finite():
+    pred = torch.ones(1, 1, 8, 8, dtype=torch.float16)
+    target = torch.zeros(1, 1, 8, 8)
+    target[0, 0, 3, 3] = 1.0
+    loss, _pos, neg = focal_loss_components(pred, target, beta=1.0)
+    tree = per_tree_peak_loss(pred, target, radius_px=2)
+    assert torch.isfinite(loss)
+    assert torch.isfinite(neg)
+    assert torch.isfinite(tree)
+    assert float(tree.item()) < 1e-3
+
+
 def test_per_tree_peak_loss_empty_target_is_zero():
     pred = torch.full((1, 1, 16, 16), 0.4)
     target = torch.zeros(1, 1, 16, 16)

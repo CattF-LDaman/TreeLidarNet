@@ -67,7 +67,7 @@ def make_unknown_mask(
     *,
     origin_x: float,
     origin_y: float,
-    unknown_band_m: float = 12.0,
+    unknown_band_m: float = 5.0,
     chip_size_m: float = CHIP_SIZE_M,
     cell_size_m: float = CELL_SIZE_M,
 ) -> np.ndarray:
