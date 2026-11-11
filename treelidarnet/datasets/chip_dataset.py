@@ -13,50 +13,72 @@ from treelidarnet.models.bev_voxel import scatter_points_to_bev
 
 
 class ChipDataset(Dataset):
-    def __init__(self, chip_paths: list[Path], *, grid_size: int | None = None) -> None:
+    def __init__(
+        self,
+        chip_paths: list[Path],
+        *,
+        grid_size: int | None = None,
+        labels: bool = True,
+    ) -> None:
         self.paths = chip_paths
         self.grid_size = grid_size or grid_cells()
+        self.labels = labels
 
     def __len__(self) -> int:
         return len(self.paths)
 
+    def _bev(self, xyz: torch.Tensor, feat: torch.Tensor) -> torch.Tensor:
+        if xyz.shape[0] == 0:
+            return torch.zeros(feat.shape[1] + 1, self.grid_size, self.grid_size)
+        return scatter_points_to_bev(
+            xyz,
+            feat,
+            grid_size=self.grid_size,
+            cell_size=CELL_SIZE_M,
+        )
+
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         data = np.load(self.paths[idx])
-        xyz = torch.from_numpy(data["xyz"].astype(np.float32))
-        feat = torch.from_numpy(data["feat"].astype(np.float32).copy())
-        # DHMV intensity is uint16-scale; keep BEV in ~[0, 1] for stable fp16 convs.
-        if feat.shape[0]:
-            feat[:, 0] = feat[:, 0] / 65535.0
-            feat[:, 1] = feat[:, 1] / 7.0
-            feat[:, 2] = feat[:, 2] / 31.0
-        heatmap = torch.from_numpy(data["heatmap"].astype(np.float32))
-        ignore = torch.from_numpy(data["ignore"].astype(np.float32))
-        if "unknown" in data:
-            unknown = torch.from_numpy(data["unknown"].astype(np.float32))
-        else:
-            # Legacy chips: treat low-heatmap cells as unlabeled (canopy v2 fallback).
-            heat_np = data["heatmap"].astype(np.float32)
-            unknown = torch.from_numpy((heat_np < 0.05).astype(np.float32))
-        if "hard_negative" in data:
-            hard_negative = torch.from_numpy(data["hard_negative"].astype(np.float32))
-        else:
-            hard_negative = torch.zeros_like(heatmap)
-        if xyz.shape[0] == 0:
-            bev = torch.zeros(feat.shape[1] + 1, self.grid_size, self.grid_size)
-        else:
-            bev = scatter_points_to_bev(
-                xyz,
-                feat,
-                grid_size=self.grid_size,
-                cell_size=CELL_SIZE_M,
-            )
-        return {
-            "bev": bev,
-            "heatmap": heatmap.unsqueeze(0),
-            "ignore": ignore.unsqueeze(0),
-            "unknown": unknown.unsqueeze(0),
-            "hard_negative": hard_negative.unsqueeze(0),
-        }
+        try:
+            xyz = torch.from_numpy(data["xyz"].astype(np.float32))
+            feat = torch.from_numpy(data["feat"].astype(np.float32).copy())
+            # DHMV intensity is uint16-scale; keep BEV in ~[0, 1] for stable fp16 convs.
+            if feat.shape[0]:
+                feat[:, 0] = feat[:, 0] / 65535.0
+                feat[:, 1] = feat[:, 1] / 7.0
+                feat[:, 2] = feat[:, 2] / 31.0
+            bev = self._bev(xyz, feat)
+            if not self.labels:
+                origin = torch.from_numpy(np.array(data["origin"], dtype=np.float64, copy=True))
+                return {"bev": bev, "origin": origin}
+            heatmap = torch.from_numpy(data["heatmap"].astype(np.float32))
+            ignore = torch.from_numpy(data["ignore"].astype(np.float32))
+            if "unknown" in data:
+                unknown = torch.from_numpy(data["unknown"].astype(np.float32))
+            else:
+                # Legacy chips: treat low-heatmap cells as unlabeled (canopy v2 fallback).
+                heat_np = data["heatmap"].astype(np.float32)
+                unknown = torch.from_numpy((heat_np < 0.05).astype(np.float32))
+            if "hard_negative" in data:
+                hard_negative = torch.from_numpy(data["hard_negative"].astype(np.float32))
+            else:
+                hard_negative = torch.zeros_like(heatmap)
+            return {
+                "bev": bev,
+                "heatmap": heatmap.unsqueeze(0),
+                "ignore": ignore.unsqueeze(0),
+                "unknown": unknown.unsqueeze(0),
+                "hard_negative": hard_negative.unsqueeze(0),
+            }
+        finally:
+            data.close()
+
+
+def collate_infer_chips(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+    return {
+        "bev": torch.stack([b["bev"] for b in batch]),
+        "origin": torch.stack([b["origin"] for b in batch]),
+    }
 
 
 def collate_chips(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:

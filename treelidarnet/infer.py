@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import torch
 
@@ -41,12 +40,12 @@ def infer_chip(
         raise FileNotFoundError(npz)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load_model(checkpoint, device)
-    ds = ChipDataset([npz])
+    ds = ChipDataset([npz], labels=False)
     batch = ds[0]
     bev = batch["bev"].unsqueeze(0).to(device)
-    with torch.no_grad():
+    with torch.inference_mode():
         heat = model(bev).squeeze(0).squeeze(0).cpu().numpy()
-    origin = np.load(npz)["origin"]
+    origin = batch["origin"]
     x0, y0 = float(origin[0]), float(origin[1])
     preds = extract_peaks_from_heatmap(
         heat,

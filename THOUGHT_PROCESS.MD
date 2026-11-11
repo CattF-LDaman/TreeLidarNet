@@ -91,6 +91,7 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **22:36–22:37** | The detector writes a 200×200 heatmap and we pick the highest peaks? Is **0.25 m** fair for one tree each? | Local maxima at **≥ 0.20** inside **2 m**, then NMS. The cell places a tree to about **12 cm**. Two trunks inside **2 m** still become one detection |
 | **22:51–22:55** | Is a missed tree inside a chip punished? Should the ignore ring change? | The per-tree term punishes a stake it can see. The **8–15 m** ignore ring hides about **30%** of stakes, and tiles do not overlap. Clear it after this epoch, then one more epoch |
 | **22:58** | Register chips before empty ones, still outward | Sort from the center first, then put `tree_count > 0` in front. Both groups keep that order. Training order is unchanged |
+| **23:10–23:15** | Can infer go faster without changing detections? | Yes. The Python point loop was the **0.37 s/chip**. Same sums via `index_add_`, four workers, and infer skips the training arrays. A 24-chip grid build is now **0.005 s/chip**. Scores and peaks stay the same |
 
 ---
 
@@ -622,7 +623,19 @@ The ignore mask does not. It zeros the loss on a ring **8–15 m** in from the t
 
 ---
 
-## Where we left off (11 Nov, ~22:55)
+### 31. Faster infer, same grids (11 Nov, ~23:15)
+
+The **13–14 h** in §26 was a Python loop that added one LiDAR point at a time, on the main process. Replacing that loop with one sum in the same point order matches the old cell values exactly. On a chip with 28,000 points the loop took **0.55 s** and the new sum **0.001 s**.
+
+`infer-gent` now builds the next chips on **4** workers while the GPU runs the current batch (`--num-workers`). It reads points, features, and origin only. The heatmap and the masks stay in the file. Chip order, scores, and peak positions are unchanged. Half precision and skipping empty chips were left out, because those would move scores.
+
+A fresh 24-chip sample, grids only, took **0.11 s** (**0.005 s/chip**). The old overnight budget does not apply. The forward pass is what is left, and it was the small slice of the old 0.37 s. The first progress lines of the real infer are the timing to trust.
+
+**For write-up:** The map is the same function of the same grids. The hours were the loop.
+
+---
+
+## Where we left off (11 Nov, ~23:15)
 
 This pass still ends around **23:50** on the masks it already has. Per-tree loss in fp32, grad clip **5.0**, unknown band **5 m**. `loss/tree` has flattened near a median of **0.044**. No architecture change during this pass. After it exits: clear the ignore ring and train one more epoch (§30). Epoch 2 remains **0.000366** at step **75,500** in `archive/pre_per_tree_epoch2`. This run has not been inferred yet.
 
@@ -634,7 +647,7 @@ Within this new scale, later epochs **are** comparable to each other. A drop fro
 
 1. When this epoch exits, run `data-patch-chips-ignore`, then **one more epoch** (§30). That epoch is what teaches the stakes in the old ignore ring. Epoch 10 is still not the plan. Do not patch while this process is reading chips.
 2. Small held-out infer vs `archive/pre_full_grid_2025-11-11` and vs the epoch-2 snapshot (audit F1, large trees vs clusters). Strict F1 is recorded, not the score we optimize for.
-3. Full-city `infer-gent --score-threshold 0.2` only once that checkpoint is the one we want on the map. Budget about **13–14 h**, and only after training has left the GPU (§26). Chips run from the middle of the Gent grid outward, so a live map fills the center first (§27).
+3. Full-city `infer-gent --score-threshold 0.2` only once that checkpoint is the one we want on the map, and only after training has left the GPU. The old **13–14 h** was the point loop (§26); that loop is gone (§31). Register chips first, then empty chips, each outward from the center (§27).
 4. Then height-summary channels from the stored points (fine-tune, not a new network), and a **candidate network** on the point crops (§19, §24). Keep that crop. Ghentree later shows it as an isometric still or a small interactive 3D view of the points (§25), not as a stand-in of circles.
 
 ---
@@ -686,6 +699,7 @@ Within this new scale, later epochs **are** comparable to each other. A drop fro
 | 11 Nov ~22:34 | Read `loss/train_step` as the new total | Grid focal loss plus `0.01 × loss/tree`. Near **0.0015** on this pass. The epoch print is the average of these steps |
 | 11 Nov ~22:37 | Keep the **0.25 m** grid | Local maxima at ≥ 0.20 inside 2 m, then NMS. Placement error is about **12 cm**. Closer trunks are merged by the mound and the **2 m** rule |
 | 11 Nov ~22:55 | **Clear the ignore ring** after this epoch, then one more epoch | The 8–15 m annulus hid ~30% of stakes and tiles do not overlap. `ignore` is zeros in code. `data-patch-chips-ignore` waits until training is not reading the chips |
+| 11 Nov ~23:15 | Faster infer, **same detections** | Point-order `index_add_` matches the old cell sums. Four workers. Infer does not read the training masks. The **13–14 h** figure was the Python loop |
 
 ---
 
@@ -702,7 +716,7 @@ Within this new scale, later epochs **are** comparable to each other. A drop fro
 | v2 epoch loss (133k, 11 Nov) | Epoch 1 **0.000394**; epoch 2 **0.000366** (grid only) @ step 75,500. Epoch 3 total includes `0.01 × loss/tree`, so expect about **0.001–0.002**, not a comparison with 0.000366 |
 | Smoke infer | 200 chips, epoch-1 checkpoint — low strict F1, meaningful discoveries |
 | Full live infer | 10 686 chips, `gent_canopy_v2/best.pt`, `ghent_live.html` |
-| Git | `main` at `86b67ac` (fp32 loss, 5 m band, center-outward infer). This diary edit is local until the next commit |
+| Git | `2c5f620` cleared the ignore ring in code and put register chips first. The faster infer (§31) is the commit after that |
 | Map QA (10 Nov evening) | Large crowns weak; street trees and discoveries strong |
 | Export policy | Min confidence **0.20** at infer; map slider from 0.20 up (`infer-gent --score-threshold 0.2`) |
 | Second live pass | Re-infer 10 686 with `--live` + 0.20 floor (`infer_conf02_live.log`) |
@@ -742,8 +756,8 @@ Within this new scale, later epochs **are** comparable to each other. A drop fro
 | [docs/DEV.md](docs/DEV.md) | Commands: train, infer-gent, live viewer |
 | [docs/VISUALIZATION.md](docs/VISUALIZATION.md) | Map layers and bundles |
 
-§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch.
+§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop.
 
 ---
 
-*Design diary through 11 Nov 2026, 22:55: export confidence, live map, variable σ, full grid, tree oversampling, per-tree loss, the float16 NaN restart, the 5 m unknown band, what the U-Net does not see, a 3D LiDAR picture for Ghentree, center-outward inference, what `loss/train_step` is, why 0.25 m is enough to place a tree, and clearing the ignore ring after this epoch. For code state, see git history on `main`.*
+*Design diary through 11 Nov 2026, 23:15: export confidence, live map, variable σ, full grid, tree oversampling, per-tree loss, the float16 NaN restart, the 5 m unknown band, what the U-Net does not see, a 3D LiDAR picture for Ghentree, center-outward inference, what `loss/train_step` is, why 0.25 m is enough to place a tree, clearing the ignore ring after this epoch, and a faster infer that keeps the same grids. For code state, see git history on `main`.*

@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
 from treelidarnet.data.chips import CELL_SIZE_M, chip_id
-from treelidarnet.datasets.chip_dataset import ChipDataset, collate_chips
+from treelidarnet.datasets.chip_dataset import ChipDataset, collate_infer_chips
 from treelidarnet.datasets.chip_index import chip_paths_outward_from_index, order_paths_outward
 from treelidarnet.eval import load_ground_truths
 from treelidarnet.export_mapjson import export_city_gz
@@ -24,6 +23,11 @@ from treelidarnet.postprocess import (
     extract_peaks_from_heatmap,
     merge_chip_detections,
 )
+
+
+def _infer_worker(_worker_id: int) -> None:
+    # One thread per worker. The scatter is a single sequential sum either way.
+    torch.set_num_threads(1)
 
 
 def infer_gent_city(
@@ -40,6 +44,7 @@ def infer_gent_city(
     live_flush_every: int = 150,
     progress_every: int = 50,
     score_threshold: float = DEFAULT_PEAK_SCORE_THRESHOLD,
+    num_workers: int = 4,
 ) -> Path:
     if chips_index is not None and chips_index.is_file():
         paths, center = chip_paths_outward_from_index(chips_index)
@@ -75,34 +80,39 @@ def infer_gent_city(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(
         f"infer {len(paths)} chips batch={batch_size} device={device} "
-        f"min_confidence={score_threshold}",
+        f"workers={num_workers} min_confidence={score_threshold}",
         flush=True,
     )
     model = load_model(checkpoint, device)
-    ds = ChipDataset(paths)
-    loader = DataLoader(
-        ds,
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=collate_chips,
-        num_workers=0,
-    )
+    ds = ChipDataset(paths, labels=False)
+    use_cuda = device.type == "cuda"
+    loader_kwargs: dict = {
+        "batch_size": batch_size,
+        "shuffle": False,
+        "collate_fn": collate_infer_chips,
+        "num_workers": num_workers,
+        "pin_memory": use_cuda,
+    }
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = 2
+        loader_kwargs["worker_init_fn"] = _infer_worker
+    loader = DataLoader(ds, **loader_kwargs)
 
     chip_detections: list[tuple[str, list[Detection]]] = []
     idx = 0
     live_pred_count = 0
     last_live_flush = 0
     for batch in loader:
-        bev = batch["bev"].to(device)
-        with torch.no_grad():
+        bev = batch["bev"].to(device, non_blocking=use_cuda)
+        origins = batch["origin"]
+        with torch.inference_mode():
             heats = model(bev).squeeze(1).cpu().numpy()
         for j in range(heats.shape[0]):
             if idx >= len(paths):
                 break
-            npz_path = paths[idx]
             idx += 1
-            origin = np.load(npz_path)["origin"]
-            x0, y0 = float(origin[0]), float(origin[1])
+            x0, y0 = float(origins[j, 0]), float(origins[j, 1])
             cid = chip_id(x0, y0)
             peaks = extract_peaks_from_heatmap(
                 heats[j],

@@ -240,6 +240,7 @@ def _cmd_infer_gent(args: argparse.Namespace) -> int:
         live_flush_every=int(args.live_flush_every),
         progress_every=int(args.progress_every),
         score_threshold=float(args.score_threshold),
+        num_workers=int(args.num_workers),
     )
     print(f"Export: {out}")
     return 0
@@ -411,6 +412,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Manifest parquet; omit file to use all *.npz in chips dir",
     )
     p_city.add_argument("--batch-size", default="8")
+    p_city.add_argument(
+        "--num-workers",
+        default="4",
+        help="Processes that build the next grids while the GPU runs",
+    )
     p_city.add_argument("--limit", default=None, help="Max chips (smoke test)")
     p_city.add_argument(
         "--live",
