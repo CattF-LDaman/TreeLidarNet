@@ -44,6 +44,8 @@ uv run treelidarnet train --config configs/gent_bev_v1.yaml
 # uv run treelidarnet data-build-gent-grid --laz-dir data/raw/laz --skip-existing   # resume full grid (~days)
 # uv run treelidarnet train --config configs/gent_canopy_v2.yaml    # loads gent_real_v1/best.pt via init_checkpoint
 # uv run treelidarnet train --config configs/gent_canopy_v2.yaml --resume
+# Full-grid train uses chips_index_full + sampler.tree_chip_weight (oversample register chips); infer still full grid.
+# per_tree_weight (0.01) adds a per-stake peak loss beside the grid loss. resume_weights_only refreshes Adam when that term is turned on.
 
 # Checkpoints: `runs/<run_name>/latest.pt` (every 500 steps + each epoch + on Ctrl+C),
 # `best.pt` (lowest epoch-mean train loss). Resume:

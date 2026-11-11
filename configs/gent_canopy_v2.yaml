@@ -2,9 +2,9 @@
 task: ghent_canopy_detection
 run_name: gent_canopy_v2
 chip_glob: "*.npz"
-# After data-build-gent-grid, set chips_index to limit train/infer to grid manifest:
-# chips_index: data/manifests/chips_index_full.parquet
-init_checkpoint: runs/gent_real_v1/best.pt
+chips_index: data/manifests/chips_index_full.parquet
+# Weights before full grid + variable σ (10.7k-chip fine-tune); do not overwrite archive.
+init_checkpoint: runs/gent_canopy_v2/archive/pre_full_grid_2025-11-11/best.pt
 in_channels: 4
 base_channels: 32
 batch_size: 4
@@ -15,13 +15,25 @@ epochs: 10
 lr: 0.0003
 checkpoint_every_steps: 500
 
+# Full grid is ~8% register-positive chips; oversample so training focuses on tree targets.
+# Infer still walks all chips_index_full.parquet (infer-gent default).
+sampler:
+  tree_chip_weight: 15.0
+
 # Fine-tune from register v1: uv run treelidarnet train --config configs/gent_canopy_v2.yaml --resume
 # (loads runs/gent_canopy_v2/latest.pt if present; copy gent_real_v1/best.pt meta optional)
+
+# Restart after epoch 2 with --resume. The live process does not see this until then.
+# resume_weights_only drops Adam state because per-tree loss is a different scale.
+resume_weights_only: true
 
 loss:
   alpha: 2.0
   neg_beta: 1.0
   neg_beta_hard: 4.0
+  # ~0.01 keeps this beside the grid loss. Weight 1 would be hundreds of times larger.
+  per_tree_weight: 0.01
+  per_tree_radius_m: 2.0
 unknown_band_m: 12.0
 
 grb:

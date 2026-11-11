@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 
 
 def focal_loss_heatmap(
@@ -82,3 +83,32 @@ def focal_loss_components(
     else:
         total_mean = total.mean()
     return total_mean, pos_loss.sum() / n_pos, neg_loss.sum() / n_neg
+
+
+def per_tree_peak_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    ignore: torch.Tensor | None = None,
+    *,
+    alpha: float = 2.0,
+    radius_px: int = 8,
+    min_target: float = 0.99,
+) -> torch.Tensor:
+    """Focal loss on the max prediction within radius_px of each target peak.
+
+    Peaks are local maxima of the Gaussian target (one per register tree). Averaged
+    over trees so a missed stake is not diluted by the rest of the grid.
+    """
+    pred = pred.clamp(1e-4, 1 - 1e-4)
+    peak_k = 3
+    target_pool = F.max_pool2d(target, peak_k, stride=1, padding=peak_k // 2)
+    is_peak = (target >= min_target) & (target >= target_pool - 1e-6)
+    if ignore is not None:
+        is_peak = is_peak & (ignore < 1)
+    radius_px = max(1, int(radius_px))
+    window = radius_px * 2 + 1
+    pred_pool = F.max_pool2d(pred, window, stride=1, padding=radius_px)
+    peak_pred = pred_pool[is_peak]
+    if peak_pred.numel() == 0:
+        return pred.sum() * 0.0
+    return (-torch.log(peak_pred) * torch.pow(1 - peak_pred, alpha)).mean()

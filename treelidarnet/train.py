@@ -8,13 +8,18 @@ from pathlib import Path
 
 import torch
 import yaml
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from torch.utils.tensorboard import SummaryWriter
 
+from treelidarnet.data.chips import CELL_SIZE_M
 from treelidarnet.datasets.chip_dataset import ChipDataset, collate_chips
-from treelidarnet.datasets.chip_index import chip_paths_from_index
+from treelidarnet.datasets.chip_index import (
+    chip_paths_from_index,
+    sample_weights_for_tree_oversample,
+    tree_counts_by_chip_id,
+)
 from treelidarnet.models.gent_detector import GentTreeDetector
-from treelidarnet.models.losses import focal_loss_components
+from treelidarnet.models.losses import focal_loss_components, per_tree_peak_loss
 from treelidarnet.paths import chips_dir, manifests_dir, repo_root, runs_dir
 
 
@@ -68,6 +73,22 @@ def save_checkpoint(
     )
 
 
+def _load_weights_only(
+    path: Path,
+    *,
+    model: GentTreeDetector,
+    device: torch.device,
+) -> tuple[int, int, float]:
+    """Load model weights and step counters; leave the optimizer freshly initialized."""
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    model.load_state_dict(ckpt["model"])
+    meta = ckpt.get("meta") or {}
+    start_epoch = int(meta.get("epoch", 0))
+    global_step = int(meta.get("global_step", 0))
+    # Loss scale changes when this path is used; do not keep the old best number.
+    return start_epoch, global_step, float("inf")
+
+
 def load_training_checkpoint(
     path: Path,
     *,
@@ -115,6 +136,15 @@ def train_from_config(
     loss_cfg = dict(cfg.get("loss") or {})
     if "neg_beta" in loss_cfg and "beta" not in loss_cfg:
         loss_cfg["beta"] = loss_cfg.pop("neg_beta")
+    per_tree_weight = float(loss_cfg.pop("per_tree_weight", 0.0))
+    per_tree_radius_m = float(loss_cfg.pop("per_tree_radius_m", 2.0))
+    per_tree_radius_px = max(1, int(round(per_tree_radius_m / CELL_SIZE_M)))
+    if per_tree_weight > 0:
+        print(
+            f"Per-tree peak loss weight={per_tree_weight} radius={per_tree_radius_m} m "
+            f"({per_tree_radius_px} px)",
+            flush=True,
+        )
     ds = ChipDataset(paths)
     in_ch = int(cfg.get("in_channels", 4))
     batch = int(cfg.get("batch_size", 2))
@@ -123,9 +153,10 @@ def train_from_config(
     checkpoint_every_steps = int(cfg.get("checkpoint_every_steps", 500))
     num_workers = int(cfg.get("num_workers", 0))
     pin_memory = bool(cfg.get("pin_memory", False))
+    sampler_cfg = dict(cfg.get("sampler") or {})
+    tree_weight = float(sampler_cfg.get("tree_chip_weight", 1.0))
     loader_kwargs: dict = {
         "batch_size": batch,
-        "shuffle": True,
         "collate_fn": collate_chips,
         "num_workers": num_workers,
         "pin_memory": pin_memory and torch.cuda.is_available(),
@@ -133,6 +164,29 @@ def train_from_config(
     if num_workers > 0:
         loader_kwargs["persistent_workers"] = True
         loader_kwargs["prefetch_factor"] = int(cfg.get("prefetch_factor", 2))
+    if tree_weight > 1.0 and chips_index:
+        counts = tree_counts_by_chip_id(index_path)
+        weights = sample_weights_for_tree_oversample(paths, counts, tree_weight=tree_weight)
+        n_pos = sum(1 for p in paths if counts.get(p.stem, 0) > 0)
+        w_sum = sum(weights)
+        w_pos = sum(w for p, w in zip(paths, weights, strict=True) if counts.get(p.stem, 0) > 0)
+        p_tree = w_pos / w_sum if w_sum else 0.0
+        w_tensor = torch.tensor(weights, dtype=torch.double)
+        print(
+            f"Sampler: tree_chip_weight={tree_weight} — {n_pos}/{len(paths)} positive chips, "
+            f"~{100 * p_tree:.1f}% tree draws/step (infer still uses full index)",
+            flush=True,
+        )
+        loader_kwargs["sampler"] = WeightedRandomSampler(
+            weights=w_tensor,
+            num_samples=len(paths),
+            replacement=True,
+        )
+        loader_kwargs["shuffle"] = False
+    else:
+        if tree_weight > 1.0 and not chips_index:
+            print("tree_chip_weight ignored (set chips_index for tree_count column)", flush=True)
+        loader_kwargs["shuffle"] = True
     loader = DataLoader(ds, **loader_kwargs)
     device = _device()
     if device.type == "cuda":
@@ -160,16 +214,35 @@ def train_from_config(
             model.load_state_dict(ck["model"])
             print(f"Loaded weights from {init_path}")
 
+    weights_only = bool(cfg.get("resume_weights_only", False))
     if resume and latest_path.is_file():
-        start_epoch, global_step, best_epoch_loss = load_training_checkpoint(
-            latest_path, model=model, optimizer=opt, scaler=scaler, device=device
-        )
-        print(f"Resumed from {latest_path} (epoch index {start_epoch}, step {global_step})")
+        if weights_only:
+            start_epoch, global_step, best_epoch_loss = _load_weights_only(
+                latest_path, model=model, device=device
+            )
+            print(
+                f"Resumed weights only from {latest_path} "
+                f"(epoch index {start_epoch}, step {global_step}, fresh optimizer)"
+            )
+        else:
+            start_epoch, global_step, best_epoch_loss = load_training_checkpoint(
+                latest_path, model=model, optimizer=opt, scaler=scaler, device=device
+            )
+            print(f"Resumed from {latest_path} (epoch index {start_epoch}, step {global_step})")
     elif resume and best_path.is_file():
-        start_epoch, global_step, best_epoch_loss = load_training_checkpoint(
-            best_path, model=model, optimizer=opt, scaler=scaler, device=device
-        )
-        print(f"Resumed from {best_path} (epoch index {start_epoch}, step {global_step})")
+        if weights_only:
+            start_epoch, global_step, best_epoch_loss = _load_weights_only(
+                best_path, model=model, device=device
+            )
+            print(
+                f"Resumed weights only from {best_path} "
+                f"(epoch index {start_epoch}, step {global_step}, fresh optimizer)"
+            )
+        else:
+            start_epoch, global_step, best_epoch_loss = load_training_checkpoint(
+                best_path, model=model, optimizer=opt, scaler=scaler, device=device
+            )
+            print(f"Resumed from {best_path} (epoch index {start_epoch}, step {global_step})")
 
     writer: SummaryWriter | None = None
     if tensorboard:
@@ -234,6 +307,16 @@ def train_from_config(
                         hard_negative=hard_neg,
                         **loss_cfg,
                     )
+                    tree_m = pred.sum() * 0.0
+                    if per_tree_weight > 0:
+                        tree_m = per_tree_peak_loss(
+                            pred,
+                            target,
+                            ignore,
+                            alpha=float(loss_cfg.get("alpha", 2.0)),
+                            radius_px=per_tree_radius_px,
+                        )
+                        loss = loss + per_tree_weight * tree_m
                 scaler.scale(loss).backward()
                 scaler.step(opt)
                 scaler.update()
@@ -252,6 +335,8 @@ def train_from_config(
                     writer.add_scalar("loss/train_step", loss_val, global_step)
                     writer.add_scalar("loss/pos", float(pos_m.item()), global_step)
                     writer.add_scalar("loss/neg", float(neg_m.item()), global_step)
+                    if per_tree_weight > 0:
+                        writer.add_scalar("loss/tree", float(tree_m.item()), global_step)
                 last_pred = pred.detach().cpu()
                 last_target = target.detach().cpu()
                 if checkpoint_every_steps > 0 and global_step % checkpoint_every_steps == 0:
