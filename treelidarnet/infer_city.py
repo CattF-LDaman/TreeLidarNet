@@ -43,13 +43,15 @@ def infer_gent_city(
 ) -> Path:
     if chips_index is not None and chips_index.is_file():
         paths, center = chip_paths_outward_from_index(chips_index)
+        order_msg = "register chips first, then the rest; each outward"
     else:
         paths, center = order_paths_outward(sorted(chips_dir().glob(chip_glob)))
+        order_msg = "outward"
     if not paths:
         raise FileNotFoundError(f"No chips in {chips_dir()}")
     if center is not None:
         print(
-            f"infer order: outward from ({center[0]:.0f}, {center[1]:.0f})",
+            f"infer order: {order_msg} from ({center[0]:.0f}, {center[1]:.0f})",
             flush=True,
         )
     if limit is not None:

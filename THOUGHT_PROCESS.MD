@@ -85,7 +85,12 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **22:00–22:05** | How are the scalars? Are we doing okay? | Halfway through the restarted epoch. `loss/tree` **0.075 → 0.044**. `loss/pos` crept **0.69 → 0.79**. Keep going; no change mid-pass |
 | **22:06–22:12** | How much more training until this model is its best? Wider U-Net? Are the points themselves used? Should shape have been in the model? | Finish **this epoch**. Do not widen the U-Net. Points are averaged into cells; height above ground is stored and unused. Shape comes later as height channels, then the crop model |
 | **22:19** | Keep the LiDAR points of each detection for **Ghentree** | Same crop the second model sees. Later: a static isometric image of those points, or a small interactive 3D view. Not a stand-in made of circles |
+| **22:24** | How long will the infer after this epoch take? | About **0.37 s/chip**. Full **133k** is **13–14 h**. The **10,686** register chips are about **1 h**. Do not infer while training holds the GPU |
 | **22:27** | Infer should fill the map from the **center of Ghent** outward | `infer-gent` sorts chips by distance from the middle of the grid. The finished detections do not change. `--limit` now keeps the center |
+| **22:34** | What is `loss/train_step`? | The loss of one batch: grid focal loss plus **0.01 × `loss/tree`**. That is what the printed epoch loss averages. Near **0.0015** on this pass |
+| **22:36–22:37** | The detector writes a 200×200 heatmap and we pick the highest peaks? Is **0.25 m** fair for one tree each? | Local maxima at **≥ 0.20** inside **2 m**, then NMS. The cell places a tree to about **12 cm**. Two trunks inside **2 m** still become one detection |
+| **22:51–22:55** | Is a missed tree inside a chip punished? Should the ignore ring change? | The per-tree term punishes a stake it can see. The **8–15 m** ignore ring hides about **30%** of stakes, and tiles do not overlap. Clear it after this epoch, then one more epoch |
+| **22:58** | Register chips before empty ones, still outward | Sort from the center first, then put `tree_count > 0` in front. Both groups keep that order. Training order is unchanged |
 
 ---
 
@@ -324,7 +329,7 @@ A chip is **not** a 3D blob collection for the network. **`xyz` / `feat`** are 3
 | Array | Meaning |
 |-------|---------|
 | `heatmap` | **Training target** — register Gaussians (now **variable σ** per `stamomtrek`) |
-| `ignore` | Edge annulus — mask loss |
+| `ignore` | Was an 8–15 m edge annulus. Now all zeros (§30). Stored chips still have the ring until the patch |
 | `unknown` | v2 — no negative loss far from register |
 | `hard_negative` | **GRB** roads/buildings rasterized on the same grid (not a separate 3D building model) |
 
@@ -547,19 +552,79 @@ The full-density crop stays on disk for training. The page loads either the imag
 
 ---
 
-### 26. Infer from the center of Ghent outward (11 Nov, ~22:27)
+### 26. How long the next infer takes (11 Nov, ~22:24)
 
-`infer-gent` walked chips in filename order. That is not west-to-east, and it is not the city. The live map writes partial rings as chips finish, so the order is what you see appear.
+The slow part is turning each chip’s points into the 200×200 grid. That scatter is a Python loop over the points, and `infer-gent` loads chips with no worker processes. A 24-chip sample took **8.76 s**, about **0.37 s per chip**. The U-Net forward pass is a small fraction of that.
 
-**Decision.** Sort by distance from the middle of the chip grid (about **103.8 km E, 196.0 km N** in Lambert). The run starts in the center and grows in rings. `--limit` now keeps those central chips, which is the right smoke test. The finished detection list does not change. Training still uses its own sample order.
+| Run | Chips | Time |
+|-----|-------|------|
+| Smoke | a few hundred | a few minutes |
+| Register chips only | **10,686** | about **1 hour** |
+| Full index (the default) | **133,000** | about **13–14 hours** |
 
-**For write-up:** A live infer fills the middle of Ghent first.
+**Decision.** Leave infer until this training process is off the GPU. A held-out sample is minutes. The full city map is an overnight run, and only after this checkpoint is the one we want to publish.
+
+**For write-up:** Inference time is the point-to-grid step, one chip at a time.
 
 ---
 
-## Where we left off (11 Nov, ~22:19)
+### 27. Infer from the center of Ghent outward (11 Nov, ~22:27)
 
-Epoch 3 is just past **halfway** (step **~94,500**). This pass still ends around **23:50**. Per-tree loss in fp32, grad clip **5.0**, unknown band **5 m**. `loss/tree` has flattened near a median of **0.044**. No architecture change during this pass. Epoch 2 remains **0.000366** at step **75,500** in `archive/pre_per_tree_epoch2`. This run has not been inferred yet.
+`infer-gent` walked chips in filename order. That is not west-to-east, and it is not the city. The live map writes partial rings as chips finish, so the order is what you see appear.
+
+**Decision.** Sort by distance from the middle of the chip grid (about **103.8 km E, 196.0 km N** in Lambert). Then split that order: chips with a register tree first, chips with none after. Each group still grows outward. `--limit` keeps the central register chips. The finished detection list does not change. Training still uses its own sample order.
+
+**For write-up:** A live infer fills the middle of Ghent with register chips first, then the empty tiles, still from the center out.
+
+---
+
+### 28. What `loss/train_step` is (11 Nov, ~22:34)
+
+`loss/train_step` is the total loss of one batch of 4 chips, written after every optimizer step. The printed epoch loss is the average of these step values.
+
+On this pass that number is the grid focal loss plus **0.01 × `loss/tree`**.
+
+The other curves are pieces of the same batch. `loss/pos` is only the stake cells. `loss/neg` is only the negative cells. `loss/tree` is the per-tree term before the 0.01 weight. A smooth of `loss/train_step` mostly follows `loss/tree`, because `0.01 × 0.044 ≈ 0.00044` is a large share of a total that sits near **0.0015**.
+
+The same scalar near **0.00039** in §17 was the grid term alone, on the epoch-1 scale. A value near **0.001–0.002** now is the new total. That is the same reading as “How to read the loss” below.
+
+**For write-up:** `loss/train_step` is the epoch loss before it is averaged. It is the quantity that changed scale when the per-tree term was added.
+
+---
+
+### 29. Heatmap peaks, and whether 0.25 m is enough (11 Nov, ~22:37)
+
+The network writes one score, from 0 to 1, on every cell of the 200×200 map. A tree is a local high spot on that map.
+
+A cell is kept when its score is at least **0.20** and it is the highest score inside a **2 m** neighborhood. Those local peaks are sorted, at most **64** are kept, and a second **2 m** pass drops any peak that sits next to a higher one. The cell center is the map position. Overlapping chips are merged at **2.5 m**, and the higher score wins.
+
+Training asked for a Gaussian mound around the stake. Inference reads the top of each mound.
+
+**Is 0.25 m a fair resolution for individual trees?** Yes, for placing a tree. The winning cell’s center can be off by at most about **12 cm**. Stakes, crown peaks, and the **3 m** match are measured in meters. Street trees are often **8–12 m** apart, which is many cells.
+
+What decides whether two trunks stay separate is coarser than the grid. The training mound is **1.0–2.5 m** wide, the deepest U-Net layer sees **1 m** cells, and any weaker peak within **2 m** of a stronger one is dropped. Two trunks inside that 2 m come out as one detection. The LiDAR is about **16 points per square meter**, about one return per 0.25 m cell, so a finer grid would be mostly empty and would still be scored against the same mound and the same 2 m rule.
+
+**Decision.** Leave the grid at **0.25 m**. Separating closer trees means a change to the mound, the suppression radius, or a later instance model.
+
+**For write-up:** The heatmap is fine enough to point at a tree. Splitting a cluster is a different lever.
+
+---
+
+### 30. Clear the ignore ring (11 Nov, ~22:55)
+
+A missed register stake is punished by the per-tree term, one vote per stake, best score within **2 m**. The grid average barely notices that one cell. Unlisted trees stay unpunished on purpose.
+
+The ignore mask does not. It zeros the loss on a ring **8–15 m** in from the tile edge, about **30%** of each chip. Tiles meet edge to edge, so a stake in that ring is never a positive anywhere. The spec called that incomplete context. The cut-off part is the outer **8 m**, and that part was already trained.
+
+**Decision.** `ignore` is all zeros from here on. `data-patch-chips-ignore` rewrites the stored chips. Do not run it while this epoch is reading them. When the epoch exits, patch, then train **one more epoch** so those stakes get a loss. This epoch’s infer still reflects the hole.
+
+**For write-up:** About a third of register stakes were invisible to the loss. The next epoch is the one that can see them.
+
+---
+
+## Where we left off (11 Nov, ~22:55)
+
+This pass still ends around **23:50** on the masks it already has. Per-tree loss in fp32, grad clip **5.0**, unknown band **5 m**. `loss/tree` has flattened near a median of **0.044**. No architecture change during this pass. After it exits: clear the ignore ring and train one more epoch (§30). Epoch 2 remains **0.000366** at step **75,500** in `archive/pre_per_tree_epoch2`. This run has not been inferred yet.
 
 **After this epoch:**
 
@@ -567,9 +632,9 @@ Epoch 3 is just past **halfway** (step **~94,500**). This pass still ends around
 
 Within this new scale, later epochs **are** comparable to each other. A drop from one new epoch to the next is real. The curves that say whether the map moved are `loss/tree` (best score within 2 m; this is the one we added), `loss/neg` (should not climb), and `loss/pos` (exact stake cell; it can rise while `loss/tree` falls). The held-out audit F1 is still the check that the map got better. The train loss is not.
 
-1. `loss/tree` has already flattened. Another epoch on this loss is optional. Epoch 10 is not the plan.
+1. When this epoch exits, run `data-patch-chips-ignore`, then **one more epoch** (§30). That epoch is what teaches the stakes in the old ignore ring. Epoch 10 is still not the plan. Do not patch while this process is reading chips.
 2. Small held-out infer vs `archive/pre_full_grid_2025-11-11` and vs the epoch-2 snapshot (audit F1, large trees vs clusters). Strict F1 is recorded, not the score we optimize for.
-3. Full-city `infer-gent --score-threshold 0.2` only once that checkpoint is the one we want on the map. Chips run from the middle of the Gent grid outward, so a live map fills the center first (§26).
+3. Full-city `infer-gent --score-threshold 0.2` only once that checkpoint is the one we want on the map. Budget about **13–14 h**, and only after training has left the GPU (§26). Chips run from the middle of the Gent grid outward, so a live map fills the center first (§27).
 4. Then height-summary channels from the stored points (fine-tune, not a new network), and a **candidate network** on the point crops (§19, §24). Keep that crop. Ghentree later shows it as an isometric still or a small interactive 3D view of the points (§25), not as a stand-in of circles.
 
 ---
@@ -615,7 +680,12 @@ Within this new scale, later epochs **are** comparable to each other. A drop fro
 | 11 Nov ~22:12 | Shape stays out of this detector | Height above ground is already in the chip and unused. Later: height-summary channels, then the crop model on the points |
 | 11 Nov ~22:14 | Read the new epoch loss on its own scale | Total is grid loss plus `0.01 × loss/tree`. A print near **0.001–0.002** is expected. Do not compare it with **0.000366**. Later epochs compare with each other. Audit F1 is the map check |
 | 11 Nov ~22:21 | Show each detection’s **LiDAR points** on Ghentree | Same crop the second model sees. A static isometric image, or an interactive 3D view of a thinned cloud, opened from one ring. The city map stays circles |
+| 11 Nov ~22:24 | Full infer is an overnight **13–14 h**; register-only is about **1 h** | About **0.37 s/chip**, mostly the Python point-to-grid step. Do not run it beside training |
 | 11 Nov ~22:27 | **Infer outward from the center** of the chip grid | Live map fills the middle of Ghent first. Final detections are unchanged. Training order is unchanged |
+| 11 Nov ~22:58 | **Register chips before empty chips**, each still outward | One sort from the center of the whole grid, then `tree_count > 0` in front. `--limit` is the central register chips |
+| 11 Nov ~22:34 | Read `loss/train_step` as the new total | Grid focal loss plus `0.01 × loss/tree`. Near **0.0015** on this pass. The epoch print is the average of these steps |
+| 11 Nov ~22:37 | Keep the **0.25 m** grid | Local maxima at ≥ 0.20 inside 2 m, then NMS. Placement error is about **12 cm**. Closer trunks are merged by the mound and the **2 m** rule |
+| 11 Nov ~22:55 | **Clear the ignore ring** after this epoch, then one more epoch | The 8–15 m annulus hid ~30% of stakes and tiles do not overlap. `ignore` is zeros in code. `data-patch-chips-ignore` waits until training is not reading the chips |
 
 ---
 
@@ -632,7 +702,7 @@ Within this new scale, later epochs **are** comparable to each other. A drop fro
 | v2 epoch loss (133k, 11 Nov) | Epoch 1 **0.000394**; epoch 2 **0.000366** (grid only) @ step 75,500. Epoch 3 total includes `0.01 × loss/tree`, so expect about **0.001–0.002**, not a comparison with 0.000366 |
 | Smoke infer | 200 chips, epoch-1 checkpoint — low strict F1, meaningful discoveries |
 | Full live infer | 10 686 chips, `gent_canopy_v2/best.pt`, `ghent_live.html` |
-| Git | `main` at `70376a9` (oversample, per-tree loss, watcher). This diary edit is local until the next commit |
+| Git | `main` at `86b67ac` (fp32 loss, 5 m band, center-outward infer). This diary edit is local until the next commit |
 | Map QA (10 Nov evening) | Large crowns weak; street trees and discoveries strong |
 | Export policy | Min confidence **0.20** at infer; map slider from 0.20 up (`infer-gent --score-threshold 0.2`) |
 | Second live pass | Re-infer 10 686 with `--live` + 0.20 floor (`infer_conf02_live.log`) |
@@ -649,7 +719,7 @@ Within this new scale, later epochs **are** comparable to each other. A drop fro
 
 - **Coverage:** Full **133k** chip index for **infer**; **train** oversamples **~10.7k** register chips (§16).
 - **Checkpoint:** Epoch 1 of the full-grid pass is only a new baseline; `best.pt` is lowest **train** loss. Audit and strict F1 are infer scores (§20), not the train objective.
-- **Loss:** Per-tree peak loss (weight **0.01**) is running in **fp32** with grad clip **5.0** (§21). Unknown band is **5 m** (§22). `loss/tree` has flattened near **0.044**; finishing this epoch is the plan, not epoch 10 (§24).
+- **Loss:** Per-tree peak loss (weight **0.01**) is running in **fp32** with grad clip **5.0** (§21). Unknown band is **5 m** (§22). The ignore ring is cleared in code; stored chips still have it until `data-patch-chips-ignore` after this epoch, then one more epoch (§30).
 - **Shape:** The U-Net sees averaged cells. Height above ground is stored per point and not used. A wider net is not the next step. Height-summary channels, then the crop model (§19, §24).
 - **Validation:** No held-out F1 in the train loop. After infer, the map shows audit F1 (primary) and strict F1 (secondary), frozen at the export floor.
 - **Large trees / clusters:** §10 + §14 — σ helps singles; **silent clusters** are weak/missing peaks, not mainly NMS.
@@ -672,8 +742,8 @@ Within this new scale, later epochs **are** comparable to each other. A drop fro
 | [docs/DEV.md](docs/DEV.md) | Commands: train, infer-gent, live viewer |
 | [docs/VISUALIZATION.md](docs/VISUALIZATION.md) | Map layers and bundles |
 
-§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: `infer-gent` starts at the center of the grid and grows outward.
+§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch.
 
 ---
 
-*Design diary through 11 Nov 2026, 22:27: export confidence, live map, variable σ, full grid, tree oversampling, per-tree loss, the float16 NaN restart, the 5 m unknown band, what the U-Net does not see, a 3D LiDAR picture for Ghentree, and center-outward inference. For code state, see git history on `main`.*
+*Design diary through 11 Nov 2026, 22:55: export confidence, live map, variable σ, full grid, tree oversampling, per-tree loss, the float16 NaN restart, the 5 m unknown band, what the U-Net does not see, a 3D LiDAR picture for Ghentree, center-outward inference, what `loss/train_step` is, why 0.25 m is enough to place a tree, and clearing the ignore ring after this epoch. For code state, see git history on `main`.*

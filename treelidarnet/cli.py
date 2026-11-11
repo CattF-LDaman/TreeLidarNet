@@ -15,7 +15,11 @@ from treelidarnet.data.download_grb import download_gent_grb
 from treelidarnet.data.download_laz import download_gent_laz
 from treelidarnet.data.import_gent import DEFAULT_EXPORT_URL, import_gent_geojson
 from treelidarnet.data.patch_grb_masks import patch_chips_grb
-from treelidarnet.data.patch_heatmaps import patch_chips_heatmaps, patch_chips_unknown_band
+from treelidarnet.data.patch_heatmaps import (
+    patch_chips_clear_ignore,
+    patch_chips_heatmaps,
+    patch_chips_unknown_band,
+)
 from treelidarnet.data.split import (
     init_split_meta_from_example,
     load_split_meta,
@@ -107,6 +111,15 @@ def _cmd_data_build_gent_grid(args: argparse.Namespace) -> int:
         dtm_path=dtm,
         limit=int(args.limit) if args.limit else None,
         skip_existing=bool(args.skip_existing),
+    )
+    return 0
+
+
+def _cmd_data_patch_chips_ignore(args: argparse.Namespace) -> int:
+    index = Path(args.index) if args.index else manifests_dir() / "chips_index_full.parquet"
+    patch_chips_clear_ignore(
+        index_parquet=index,
+        limit=int(args.limit) if args.limit else None,
     )
     return 0
 
@@ -281,6 +294,14 @@ def main(argv: list[str] | None = None) -> int:
     p_grb_patch.add_argument("--road-buffer-m", default="2.0")
     p_grb_patch.add_argument("--limit", default=None)
     p_grb_patch.set_defaults(func=_cmd_data_patch_chips_grb)
+
+    p_ign_patch = sub.add_parser(
+        "data-patch-chips-ignore",
+        help="Zero the ignore mask on existing chips (run when training is not reading them)",
+    )
+    p_ign_patch.add_argument("--index", default=None)
+    p_ign_patch.add_argument("--limit", default=None)
+    p_ign_patch.set_defaults(func=_cmd_data_patch_chips_ignore)
 
     p_unk_patch = sub.add_parser(
         "data-patch-chips-unknown",

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from treelidarnet.datasets.chip_index import (
     order_paths_outward,
+    registry_first,
     sample_weights_for_tree_oversample,
 )
 
@@ -23,4 +24,28 @@ def test_order_paths_outward_starts_at_the_center():
     ordered, center = order_paths_outward(paths, chip_size_m=50.0)
     assert ordered[0].name == "gent_50m_500_500.npz"
     assert {p.name for p in ordered[1:]} == {"gent_50m_0_0.npz", "gent_50m_1000_0.npz"}
+    assert center == (525.0, 275.0)
+
+
+def test_registry_chips_stay_outward_and_come_first():
+    paths = [
+        Path("gent_50m_0_0.npz"),
+        Path("gent_50m_1000_0.npz"),
+        Path("gent_50m_500_500.npz"),
+        Path("gent_50m_500_0.npz"),
+    ]
+    ordered, center = order_paths_outward(paths, chip_size_m=50.0)
+    counts = {
+        "gent_50m_0_0": 0,
+        "gent_50m_1000_0": 2,
+        "gent_50m_500_500": 0,
+        "gent_50m_500_0": 1,
+    }
+    split = registry_first(ordered, counts)
+    assert [p.name for p in split] == [
+        "gent_50m_500_0.npz",
+        "gent_50m_1000_0.npz",
+        "gent_50m_500_500.npz",
+        "gent_50m_0_0.npz",
+    ]
     assert center == (525.0, 275.0)

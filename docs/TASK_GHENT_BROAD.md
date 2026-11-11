@@ -13,7 +13,7 @@
 | Register peaks | **Positive** heatmap Gaussians at eligible `gis_id` points (weak, not exhaustive); **σ scales with `stamomtrek`** (1.0–2.5 m) so large crowns get wider targets |
 | **Unknown mask** | Pixels > `unknown_band_m` from any register point → **no negative loss** (unlisted canopy allowed) |
 | **Hard negative** | GRB `IngeschetstGebouw` + `Wegsegment` (2 m buffer) → strong negative (`data-download-grb`, `data-patch-chips-grb`) |
-| Chip edges | Existing ignore annulus (unchanged) |
+| Chip edges | Ignore mask is clear: every stake in the tile is a positive |
 
 Config: [configs/gent_canopy_v2.yaml](../configs/gent_canopy_v2.yaml).
 

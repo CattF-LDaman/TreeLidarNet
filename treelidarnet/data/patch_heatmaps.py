@@ -15,7 +15,7 @@ from treelidarnet.data.chips import (
     rasterize_heatmap,
 )
 from treelidarnet.data.grb import GrbIndex, make_hard_negative_mask
-from treelidarnet.datasets.chip_index import tree_counts_by_chip_id
+from treelidarnet.datasets.chip_index import chip_paths_from_index, tree_counts_by_chip_id
 from treelidarnet.paths import chips_dir, data_dir
 
 
@@ -80,6 +80,35 @@ def patch_chips_unknown_band(
         f"Done patching unknown band {unknown_band_m} m on {patched} chips",
         flush=True,
     )
+    return patched
+
+
+def patch_chips_clear_ignore(
+    *,
+    index_parquet: Path,
+    limit: int | None = None,
+) -> int:
+    """Zero the ignore mask stored in each chip. Heatmaps and LiDAR stay put.
+
+    Train reads this array from the npz. New builds are already zeros; this
+    rewrites chips built with the 8–15 m ring. Run it only when training is
+    not loading those files.
+    """
+    paths = chip_paths_from_index(index_parquet)
+    if limit is not None:
+        paths = paths[:limit]
+    patched = 0
+    for i, path in enumerate(paths, 1):
+        with np.load(path) as data:
+            if "ignore" not in data.files or not np.any(data["ignore"]):
+                continue
+            arrays = {k: np.array(data[k]) for k in data.files}
+        arrays["ignore"] = np.zeros_like(arrays["ignore"])
+        _atomic_save_npz(path, arrays)
+        patched += 1
+        if i % 500 == 0:
+            print(f"cleared ignore {i}/{len(paths)}", flush=True)
+    print(f"Done clearing ignore on {patched} chips ({len(paths)} scanned)", flush=True)
     return patched
 
 

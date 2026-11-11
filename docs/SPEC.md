@@ -147,9 +147,7 @@ CHM baseline uses the **same** DTM for fair comparison (Appendix A).
 Rasterize tree locations onto a **0.25 m** grid inside the chip:
 
 - **Center heatmap:** Gaussian at each eligible tree xy; **per-tree σ** from register `stamomtrek` (girth in cm): `σ = clamp(0.9 + 0.015 × st, 1.0, 2.5)` m; **1.0 m** if missing/invalid (`treelidarnet.data.chips.heatmap_sigma_m`).
-- **Ignore mask:** Annulus 8–15 m from chip edge (incomplete context).
-
-Trees outside chip but inside buffer contribute to **ignore**, not negative.
+- **Ignore mask:** All zeros. Every stake inside its 50 m tile is a training target. The old annulus 8–15 m from the edge is cleared: these tiles do not overlap, so a stake there was never a positive.
 
 ### 5.3 Augmentation (train)
 
@@ -194,7 +192,7 @@ Urban Gent has far more **unlabeled** surface than inventory points. v1 defaults
 | **Negative source** | Chips from train kaartbladen with centroid on road/roof-heavy cells (optional GRB road/building mask >50% of chip area) |
 | **Val / test** | **All** chips in region — no subsampling (metrics need full FP rate) |
 
-Edge-only trees (in 8–15 m ignore annulus) do not create positive targets; they are masked in the heatmap loss.
+Every eligible stake inside a tile is a positive. There is no edge band that drops it from the loss.
 
 **Alternative (ablation):** train on positive-only chips — faster but higher FP; document if used.
 

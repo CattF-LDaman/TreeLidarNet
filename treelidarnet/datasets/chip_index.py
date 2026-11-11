@@ -64,15 +64,28 @@ def order_paths_outward(
     return [item[0] for item in placed] + unknown, center
 
 
+def registry_first(paths: list[Path], tree_counts: dict[str, int]) -> list[Path]:
+    """Keep relative order. Chips with a register tree come before the rest."""
+    with_trees = [path for path in paths if tree_counts.get(path.stem, 0) > 0]
+    without = [path for path in paths if tree_counts.get(path.stem, 0) <= 0]
+    return with_trees + without
+
+
 def chip_paths_outward_from_index(
     index_parquet: Path,
 ) -> tuple[list[Path], tuple[float, float] | None]:
-    """Existing chips from a manifest, nearest the coverage center first."""
+    """Register chips first, then the rest. Each group grows outward from the center.
+
+    The outward sort uses every chip, so the center is the middle of the whole grid.
+    The registry split keeps that order inside each group.
+    """
     df = pd.read_parquet(index_parquet)
     col = "chip_id" if "chip_id" in df.columns else df.columns[0]
     origins: dict[str, tuple[float, float]] = {}
     paths: list[Path] = []
+    counts: dict[str, int] = {}
     has_origin = "origin_x" in df.columns and "origin_y" in df.columns
+    has_trees = "tree_count" in df.columns
     for row in df.itertuples(index=False):
         cid = str(getattr(row, col))
         path = chips_dir() / f"{cid}.npz"
@@ -81,7 +94,12 @@ def chip_paths_outward_from_index(
         paths.append(path)
         if has_origin:
             origins[cid] = (float(getattr(row, "origin_x")), float(getattr(row, "origin_y")))
-    return order_paths_outward(paths, origins=origins or None)
+        if has_trees:
+            counts[cid] = int(getattr(row, "tree_count"))
+    ordered, center = order_paths_outward(paths, origins=origins or None)
+    if has_trees:
+        ordered = registry_first(ordered, counts)
+    return ordered, center
 
 
 def tree_counts_by_chip_id(index_parquet: Path) -> dict[str, int]:
