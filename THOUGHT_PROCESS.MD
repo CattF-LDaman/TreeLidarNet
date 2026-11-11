@@ -706,9 +706,9 @@ The downloader asked OpenLiDAR for one point in the middle of each square and sa
 
 ---
 
-## Where we left off (12 Nov, ~00:36)
+## Where we left off (12 Nov, ~00:53)
 
-The job now is to get this model away from hallucinating trees (§33). Epoch 3 is in `best.pt` (loss **0.0021**, step **110,242**). Training is stopped. The center at **0.20** is about **50 rings per chip**; at **0.85** it is about **5** (§32). A full live infer of **133k** chips is running, register chips first, outward from the center. The live slider starts at **0.85** and can go down to **0.20**. Rings draw over the register.
+The job now is to get this model away from hallucinating trees (§33). Epoch 3 is in `best.pt` (loss **0.0021**, step **110,242**). Training is stopped. The center at **0.20** is about **50 rings per chip**; at **0.85** it is about **5** (§32). The full live infer was stopped at **32,400 / 133,000** chips, **1,631,070** rings in `exports/inference/live/predictions.json`. A Google Earth snapshot of the **≥ 0.94** peaks is `exports/inference/gent_epoch3_live_conf94.kmz` (**16,641** points, from an earlier flush). Export floor stays **0.20**. The live slider starts at **0.85**. Rings draw over the register.
 
 Do not start another epoch of this loss. Do not patch chips while infer is reading them. The slider is a way to look. It is not the fix. The east–west gaps are a second flight line to fetch tomorrow (§35), before that epoch.
 
