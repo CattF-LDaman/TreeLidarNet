@@ -36,10 +36,18 @@
     <div class="legend">
       <div class="legend-row"><span class="swatch-filled"></span> <strong>Register tree</strong> — Stad Gent inventory (ground truth)</div>
       <div class="legend-row"><span class="swatch-ring"></span> <strong>Model guess</strong> — neural net on DHMV II chips</div>
-      <div style="color:#8b949e;font-size:0.72rem;margin-top:0.35rem">Ring on top of green = match. Ring alone ≈ discovery or offset.</div>
+      <div style="color:#8b949e;font-size:0.72rem;margin-top:0.35rem">Amber ring sits on the green. A ring around a disc is a match. A ring alone is a discovery or an offset.</div>
     </div>
     <label><input type="checkbox" id="show-gt" checked> Show register (green)</label>
     <label><input type="checkbox" id="show-pred" checked> Show model (amber rings)</label>
+    <div style="margin-top:0.65rem;padding-top:0.55rem;border-top:1px solid #30363d">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;color:#c9d1d9;font-size:0.75rem">
+        <span>Minimum confidence</span>
+        <span id="thresh-val" style="color:#fbbf24;font-variant-numeric:tabular-nums">0.85</span>
+      </div>
+      <input type="range" id="score-thresh" min="0.2" max="0.95" step="0.01" value="0.85" style="width:100%;margin:0.35rem 0 0.15rem;accent-color:#8957e5">
+      <p id="thresh-help" style="color:#6e7681;font-size:0.68rem;line-height:1.35;margin:0">Export floor is 0.20. This checkpoint is hot, so the slider starts at 0.85.</p>
+    </div>
     <div class="bar"><i id="prog"></i></div>
     <div id="stats">Waiting for status.json…</div>
   </div>

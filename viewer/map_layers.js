@@ -46,7 +46,33 @@ window.TreeLidarMap = (function () {
       );
     }
 
-    /* Model predictions underneath — hollow rings so register stays readable on top. */
+    if (showGt && allGt.length) {
+      layers.push(
+        new deck.ScatterplotLayer({
+          id: "ghent-gt-trees",
+          data: allGt,
+          pickable: true,
+          filled: true,
+          stroked: true,
+          radiusUnits: "meters",
+          getPosition: function (d) {
+            return d.position;
+          },
+          getRadius: gtRadius,
+          getFillColor: gtFill,
+          getLineColor: gtLine,
+          getLineWidth: function (d) {
+            return d.hasSize ? 1 : 1.5;
+          },
+          lineWidthUnits: "pixels",
+          lineWidthMinPixels: 1,
+          autoHighlight: true,
+          highlightColor: [167, 243, 208, 220],
+        })
+      );
+    }
+
+    /* Amber rings last, so a detection draws over the green disc it lands on. */
     if (showPred && allPred.length) {
       layers.push(
         new deck.ScatterplotLayer({
@@ -75,32 +101,6 @@ window.TreeLidarMap = (function () {
       );
     }
 
-    if (showGt && allGt.length) {
-      layers.push(
-        new deck.ScatterplotLayer({
-          id: "ghent-gt-trees",
-          data: allGt,
-          pickable: true,
-          filled: true,
-          stroked: true,
-          radiusUnits: "meters",
-          getPosition: function (d) {
-            return d.position;
-          },
-          getRadius: gtRadius,
-          getFillColor: gtFill,
-          getLineColor: gtLine,
-          getLineWidth: function (d) {
-            return d.hasSize ? 1 : 1.5;
-          },
-          lineWidthUnits: "pixels",
-          lineWidthMinPixels: 1,
-          autoHighlight: true,
-          highlightColor: [167, 243, 208, 220],
-        })
-      );
-    }
-
     return layers;
   }
 
@@ -117,7 +117,7 @@ window.TreeLidarMap = (function () {
     syncOverlay,
     LEGEND: {
       gt: "Gent register (open data) — filled green",
-      pred: "LiDAR model — amber ring (under green)",
+      pred: "LiDAR model — amber ring (on top of green)",
     },
   };
 })();

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -84,22 +85,49 @@ def merge_chip_detections(
                 )
             )
     sorted_d = sorted(all_d, key=lambda d: d.score, reverse=True)
-    kept: list[Detection] = []
+    # Same rule as a score-ordered scan: the first kept point within radius wins.
+    # Buckets only limit which points are tested.
+    cell = radius_m if radius_m > 0 else 1.0
     r2 = radius_m * radius_m
+    buckets: dict[tuple[int, int], list[Detection]] = {}
+    order: dict[int, int] = {}
+    seq = 0
+
+    def _cell(x: float, y: float) -> tuple[int, int]:
+        return (math.floor(x / cell), math.floor(y / cell))
+
+    def _add(det: Detection) -> None:
+        nonlocal seq
+        buckets.setdefault(_cell(det.x, det.y), []).append(det)
+        order[id(det)] = seq
+        seq += 1
+
+    def _drop(det: Detection) -> None:
+        key = _cell(det.x, det.y)
+        buckets[key].remove(det)
+        del order[id(det)]
+
     for cand in sorted_d:
-        ok = True
-        for k in kept:
-            dx = cand.x - k.x
-            dy = cand.y - k.y
-            if dx * dx + dy * dy <= r2:
-                chips = tuple(dict.fromkeys(k.source_chip_ids + cand.source_chip_ids))
-                if cand.score > k.score:
-                    kept.remove(k)
-                    kept.append(
-                        Detection(x=cand.x, y=cand.y, score=cand.score, source_chip_ids=chips)
-                    )
-                ok = False
-                break
-        if ok:
-            kept.append(cand)
-    return kept
+        ix, iy = _cell(cand.x, cand.y)
+        hit: Detection | None = None
+        hit_seq = 0
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for kept in buckets.get((ix + dx, iy + dy), ()):
+                    ddx = cand.x - kept.x
+                    ddy = cand.y - kept.y
+                    if ddx * ddx + ddy * ddy <= r2:
+                        kept_seq = order[id(kept)]
+                        if hit is None or kept_seq < hit_seq:
+                            hit = kept
+                            hit_seq = kept_seq
+        if hit is None:
+            _add(cand)
+            continue
+        if cand.score > hit.score:
+            chips = tuple(dict.fromkeys(hit.source_chip_ids + cand.source_chip_ids))
+            _drop(hit)
+            _add(Detection(x=cand.x, y=cand.y, score=cand.score, source_chip_ids=chips))
+    flat = [det for group in buckets.values() for det in group]
+    flat.sort(key=lambda det: order[id(det)])
+    return flat

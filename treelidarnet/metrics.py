@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -70,24 +71,40 @@ def match_detections(
     dists: list[float] = []
     fp = 0
     discoveries = 0
+    # Cell is the discovery radius, so a 3 m match and a 5 m near-miss are both
+    # inside the 3×3 neighborhood. Same nearest-unmatched rule as a full scan.
+    cell = discovery_distance_m if discovery_distance_m > 0 else 1.0
+    buckets: dict[tuple[int, int], list[int]] = {}
+    for i, gt in enumerate(gts):
+        key = (math.floor(gt.x / cell), math.floor(gt.y / cell))
+        buckets.setdefault(key, []).append(i)
 
-    for pred in sorted_preds:
+    def _near(pred: Detection, span: int, limit2: float, unmatched_only: bool) -> tuple[int, float]:
+        ix = math.floor(pred.x / cell)
+        iy = math.floor(pred.y / cell)
         best_i = -1
-        best_d2 = match_r2 + 1.0
-        for i, gt in enumerate(gts):
-            if gt_matched[i]:
-                continue
-            d2 = _dist2(pred, gt)
-            if d2 <= match_r2 and d2 < best_d2:
-                best_d2 = d2
-                best_i = i
+        best_d2 = limit2 + 1.0
+        for dx in range(-span, span + 1):
+            for dy in range(-span, span + 1):
+                for i in buckets.get((ix + dx, iy + dy), ()):
+                    if unmatched_only and gt_matched[i]:
+                        continue
+                    d2 = _dist2(pred, gts[i])
+                    if d2 <= limit2 and d2 < best_d2:
+                        best_d2 = d2
+                        best_i = i
+        return best_i, best_d2
+
+    match_span = max(1, math.ceil(match_distance_m / cell))
+    for pred in sorted_preds:
+        best_i, best_d2 = _near(pred, match_span, match_r2, True)
         if best_i >= 0:
             gt_matched[best_i] = True
             tp += 1
             dists.append(float(np.sqrt(best_d2)))
         else:
-            near_any = any(_dist2(pred, gt) <= disc_r2 for gt in gts)
-            if near_any:
+            near_i, _near_d2 = _near(pred, 1, disc_r2, False)
+            if near_i >= 0:
                 fp += 1
             else:
                 discoveries += 1

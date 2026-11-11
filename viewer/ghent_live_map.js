@@ -50,9 +50,16 @@
   var pollTimer = null;
   var showGt = true;
   var showPred = true;
+  var scoreMin = 0.85;
+
+  function visiblePreds() {
+    return allPred.filter(function (d) {
+      return (d.score != null ? d.score : 0) >= scoreMin;
+    });
+  }
 
   function updateLayers() {
-    TreeLidarMap.syncOverlay(overlay, allGt, allPred, {
+    TreeLidarMap.syncOverlay(overlay, allGt, visiblePreds(), {
       showGt: showGt,
       showPred: showPred,
       showPredHeat: false,
@@ -100,6 +107,7 @@
           }
         }
       }
+      var shown = visiblePreds().length;
       stats.innerHTML =
         status.state.toUpperCase() +
         " · chips " +
@@ -107,8 +115,12 @@
         "/" +
         status.total +
         "<br><span style='color:#fbbf24'><b>" +
+        shown.toLocaleString() +
+        " shown</b></span> ≥ " +
+        scoreMin.toFixed(2) +
+        " · " +
         allPred.length.toLocaleString() +
-        " model</b></span> · <span style='color:#34d399'>" +
+        " exported · <span style='color:#34d399'>" +
         allGt.length.toLocaleString() +
         " register</span>";
       if (status.state === "done" && pollTimer) {
@@ -129,6 +141,15 @@
     showPred = e.target.checked;
     updateLayers();
   };
+  var threshInput = document.getElementById("score-thresh");
+  var threshVal = document.getElementById("thresh-val");
+  if (threshInput) {
+    threshInput.oninput = function (e) {
+      scoreMin = parseFloat(e.target.value, 10);
+      if (threshVal) threshVal.textContent = scoreMin.toFixed(2);
+      updateLayers();
+    };
+  }
 
   map.once("load", function () {
     updateLayers();
