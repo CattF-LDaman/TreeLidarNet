@@ -39,7 +39,7 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **CHM** | Canopy height model: DSM − DTM. **CHM peaks** are hilltops on that height map (non-learned baseline). |
 | **Validation F1** | The same audit (and strict) scores on a **held-out** area. Not inside this train loop. Meant as a checkpoint check before the next full-city infer. |
 | **Per-tree peak loss** | Implemented, weight **0.01**. Starts when epoch 2 ends: focal penalty on the strongest prediction within **2 m** of each register peak. |
-| **Candidate network** | Later second model. **Train** on a LiDAR crop of **every** eligible register tree, including stakes the detector missed. **Run** only on detections. Tree or not, then a coarse type. |
+| **Candidate network** | Later second model. **Train** on a LiDAR crop of **every** eligible register tree, including stakes the detector missed. **Run** only on detections. PointNet verifier first; a small two-scale PointNet++ if poles and shrubs still pass (§37). |
 
 ---
 
@@ -97,6 +97,7 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **12 Nov 00:21** | High-confidence rings look like trees. Keep them | The 50 m grid is the **0.50–0.85** corner lattice. From **0.90** the frame is gone. The penalty must not use distance-to-stake, and trees already at **≥ 0.90** have to survive |
 | **12 Nov 00:36** | East–west streaks have no LiDAR. Fetch the other flight line tomorrow | **25,979** chips have zero points, **1,841** of them with register trees. The downloader saved the strip under the tile center. The strip that fills the northern edge was never requested |
 | **12 Nov 01:06** | Second model trains on every register tree | Crops come from **all** eligible stakes, including trees this detector never rang. Detections are where it **runs**, not where it **learns** |
+| **12 Nov 01:24** | Crop classifier is PointNet, then a small PointNet++ | The city detector stays the BEV U-Net. The crop is a vertical stack: column, then crown. PointNet first. Two-scale PointNet++ if poles and shrubs still pass |
 
 ---
 
@@ -721,6 +722,20 @@ Non-trees are added on purpose: GRB roofs and roads, and detector peaks that are
 
 ---
 
+### 37. PointNet first, then a small PointNet++ (12 Nov, ~01:24)
+
+The city detector stays the BEV U-Net (§24). The second model is the one that sees the points.
+
+A crop is a vertical stack. Near the ground the returns are a narrow column or a gap. Higher up they spread into a crown. A plain PointNet pools every point into one vector, which is enough to tell a tall cloud from a flat roof. It does not look at that change of shape with height. PointNet++ does, with two set-abstraction levels: a tight neighborhood for the column and a wider one for the crown, then one tree-or-not score. Coarse type, later, is the same head. Conifer versus broadleaf in this leaf-off scan is mostly that profile.
+
+**Order.** Train the verifier as a plain PointNet on every eligible register crop plus roofs, roads, and the detector’s empty peaks (§36). If that already rejects the carpet, stay there. Move to the two-scale PointNet++ when poles and shrubs still pass.
+
+**Crop.** Center x and y on the stake or the detection. Use height above ground, plus intensity, return number, and class. Subsample to a fixed count, on the order of **512** points. Ball radii are in meters. A Point Transformer is the wrong size for about **59,000** sparse crowns and a yes-or-no label. The SPEC mention of PointNet++ is an optional branch on the BEV detector. This model replaces that job with a crop, and it runs only on proposed points.
+
+**For write-up:** The map model is a photograph of the points. The classifier is a small point network on one tree’s cloud, PointNet first.
+
+---
+
 ## Where we left off (12 Nov, ~00:53)
 
 The job now is to get this model away from hallucinating trees (§33). Epoch 3 is in `best.pt` (loss **0.0021**, step **110,242**). Training is stopped. The center at **0.20** is about **50 rings per chip**; at **0.85** it is about **5** (§32). The full live infer was stopped at **32,400 / 133,000** chips, **1,631,070** rings in `exports/inference/live/predictions.json`. A Google Earth snapshot of the **≥ 0.94** peaks is `exports/inference/gent_epoch3_live_conf94.kmz` (**16,641** points, from an earlier flush). Export floor stays **0.20**. The live slider starts at **0.85**. Rings draw over the register.
@@ -733,7 +748,7 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 
 1. Tomorrow, once nothing is reading the chips: download the other flight line for each **500 m** square and rebuild the chips that have no points (§35). The index has to keep every file for a corner. Then `data-patch-chips-ignore`, then **one epoch** whose job is to stop the hallucinations (§33, §34). Patch so every stake in the tile is a positive (§30). Penalize the mid-score carpet and the chip-corner lattice. Leave a sharp high peak in place, including one on a crown the register does not list. Epoch 10 is still not the plan.
 2. Re-check the center at **0.20** and at **0.90**. Rings per chip at **0.20** should fall. Register trees this checkpoint already marks at **≥ 0.90** should still be detected.
-3. Height-summary channels from the stored points, then a **candidate network** whose training crops are **every** eligible register tree, including the ones the detector missed (§19, §36). It runs only on detections. Ghentree later shows that crop as an isometric still or a small interactive 3D view of the points (§25).
+3. Height-summary channels from the stored points, then a **candidate network** whose training crops are **every** eligible register tree, including the ones the detector missed (§19, §36). PointNet verifier first; a small two-scale PointNet++ if poles and shrubs still pass (§37). It runs only on detections. Ghentree later shows that crop as an isometric still or a small interactive 3D view of the points (§25).
 
 ---
 
@@ -768,6 +783,7 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 | 11 Nov PM | Val F1 is a **later check**, not a train loop | Held-out audit F1 vs archive before full-city infer |
 | 11 Nov ~16:25 | **Candidate network** after detection is solid | Train on a LiDAR crop of **every** eligible register tree, including misses. Run on detections. Coarse type only; register keeps species |
 | 12 Nov ~01:06 | **Emphasize: all register trees, not the matched detections** | The second model’s positives are the whole eligible register. Hits alone would be the easy trees. Inference still only scores detector proposals (§36) |
+| 12 Nov ~01:24 | **PointNet, then a small PointNet++** | The detector stays the BEV U-Net. The crop is a column under a crown. Plain PointNet is the verifier. Two scales, radii in meters, about **512** points, if poles and shrubs still pass. No Point Transformer |
 | 11 Nov ~18:45 | **Discoveries stay allowed** under per-tree loss | Unknown mask unchanged; the new term only pulls within **2 m** of a stake |
 | 11 Nov ~18:45 | Keep the discovery line at **5 m** | Audit bucket only. Match is **3 m**. Generous for street spacing, tight when the crown peak is far from the stake |
 | 11 Nov ~18:45 | **Audit F1** is the infer score we read; **strict** is secondary | Both written at infer/eval and shown on the map. Training does not use either; `best.pt` stays lowest train loss |
@@ -816,7 +832,7 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 | Heatmap σ | Per-tree from `stamomtrek` | In all built/patched chips |
 | Confidence GIF | 20%↔40% on the 10 Nov city export: 46,760 preds at 0.20, 981 at 0.40 |
 | Next loss | **Per-tree peak loss** weight **0.01**, fp32, grad clip **5.0** (§21). Then held-out **audit** F1 |
-| Later model | **Candidate network** (§19, §36) | Crop of **every** eligible register tree, hit or missed → tree? / coarse structure. Runs on detections only |
+| Later model | **Candidate network** (§19, §36, §37) | Crop of **every** eligible register tree, hit or missed. PointNet first, small PointNet++ if needed. Runs on detections only |
 
 ---
 
@@ -830,7 +846,7 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 - **Large trees / clusters:** §10 + §14 — σ helps singles; **silent clusters** are weak/missing peaks, not mainly NMS.
 - **Threshold:** Export floor now **0.20** (infer); val tuning still future; slider on full map for QA.
 - **Multimodal:** Satellite + LiDAR raised by you; not implemented (DSM/DTM optional future).
-- **Candidate model:** Not started. Second stage trains on a LiDAR crop of **every** eligible register tree, including stakes the detector missed (§19, §36). It runs only on detections. Leaf-off LiDAR will not reproduce full `sortiment`.
+- **Candidate model:** Not started. Trains on a LiDAR crop of **every** eligible register tree, including misses (§19, §36). Architecture is a PointNet verifier, then a small two-scale PointNet++ if poles and shrubs still pass (§37). It runs only on detections. Leaf-off LiDAR will not reproduce full `sortiment`.
 - **Flanders-wide / OSM:** Stated as later-stage generalization and optional alignment data.
 - **Ops:** QGIS + parallel heavy jobs compete with train/infer on same machine.
 - **Coverage holes:** **1,841** register chips have no LiDAR. The other flight line for those **500 m** squares is tomorrow’s download, then a rebuild of the empty chips (§35). Not while infer is reading them.
@@ -848,8 +864,8 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 | [docs/DEV.md](docs/DEV.md) | Commands: train, infer-gent, live viewer |
 | [docs/VISUALIZATION.md](docs/VISUALIZATION.md) | Map layers and bundles |
 
-§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. Fill those chips tomorrow, before the next epoch. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs.
+§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. Fill those chips tomorrow, before the next epoch. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs. §37: that classifier is a PointNet verifier first, then a small two-scale PointNet++ if poles and shrubs still pass.
 
 ---
 
-*Design diary through 12 Nov 2026, 00:15: export confidence, live map, variable σ, full grid, tree oversampling, per-tree loss, the float16 NaN restart, the 5 m unknown band, what the U-Net does not see, a 3D LiDAR picture for Ghentree, center-outward inference, what `loss/train_step` is, why 0.25 m is enough to place a tree, clearing the ignore ring after this epoch, a faster infer that keeps the same grids, a hot epoch-3 map that is viewable near 0.85, the decision that the next epoch has to stop the hallucinations, the constraint that peaks already at 0.90 are the trees to keep, and the east–west streaks from a flight line to download tomorrow. The second model’s training crops are every eligible register tree, missed or not. For code state, see git history on `main`.*
+*Design diary through 12 Nov 2026, 00:15: export confidence, live map, variable σ, full grid, tree oversampling, per-tree loss, the float16 NaN restart, the 5 m unknown band, what the U-Net does not see, a 3D LiDAR picture for Ghentree, center-outward inference, what `loss/train_step` is, why 0.25 m is enough to place a tree, clearing the ignore ring after this epoch, a faster infer that keeps the same grids, a hot epoch-3 map that is viewable near 0.85, the decision that the next epoch has to stop the hallucinations, the constraint that peaks already at 0.90 are the trees to keep, and the east–west streaks from a flight line to download tomorrow. The second model’s training crops are every eligible register tree, missed or not, and its network is PointNet first, then a small PointNet++ if the simple pool is not enough. For code state, see git history on `main`.*
