@@ -1,6 +1,6 @@
 # TreeLidarNet — thought process (design diary)
 
-**Session:** 10–11 November 2026 (build day, then full-grid train)  
+**Session:** 10–12 November 2026 (build day, full-grid train, anti-carpet pivot)  
 **Repo:** [TreeLidarNet](https://github.com/CattF-LDaman/TreeLidarNet) · references: HugATree, LuweDaman (Deck.GL map UX)  
 **Purpose of this file:** A readable narrative for a **project write-up** — what we wanted, how the goal changed, what we built and observed. Technical truth lives in `docs/SPEC.md`, `docs/TASK_GHENT_BROAD.md`, `docs/LABELS.md`, `docs/EVAL.md`.
 
@@ -736,19 +736,49 @@ A crop is a vertical stack. Near the ground the returns are a narrow column or a
 
 ---
 
-## Where we left off (12 Nov, ~00:53)
+### 38. The other flight line is on disk, and mid-score peaks get pushed down (12 Nov, morning)
 
-The job now is to get this model away from hallucinating trees (§33). Epoch 3 is in `best.pt` (loss **0.0021**, step **110,242**). Training is stopped. The center at **0.20** is about **50 rings per chip**; at **0.85** it is about **5** (§32). The full live infer was stopped at **32,400 / 133,000** chips, **1,631,070** rings in `exports/inference/live/predictions.json`. A Google Earth snapshot of the **≥ 0.94** peaks is `exports/inference/gent_epoch3_live_conf94.kmz` (**16,641** points, from an earlier flush). Export floor stays **0.20**. The live slider starts at **0.85**. Rings draw over the register.
+OpenLiDAR returned the second strip for each **500 m** square. **1,864** new files, **1,330** squares. The index now keeps every file for a corner. The center gap chip `gent_50m_103700_195950` went from **4** points on flight `22011_2` to **28,626** on `22010_2` plus those 4. The **25,979** chips that were stored empty are being rebuilt from those files before the next epoch.
 
-Do not start another epoch of this loss. Do not patch chips while infer is reading them. The slider is a way to look. It is not the fix. The east–west gaps are a second flight line to fetch tomorrow (§35), before that epoch.
+The penalty is the mean score of unlabeled local maxima in **[0.20, 0.90)**, inside the same **2 m** window inference uses, weight **0.1**. A local maximum at **≥ 0.90** is not in that mean, so a sharp high peak can stay with no stake nearby. The mask is detached: a **0.7** bump is only pushed down, not rewarded for climbing to **0.90**. Distance to a stake is not in the term. The printed epoch loss will include `0.1 ×` that mean. Do not compare it with **0.0021**.
 
-**How to read the loss.** The printed epoch loss is no longer the same quantity as epoch 2’s **0.000366**. That number was the grid focal loss alone, averaged over every cell. This epoch’s total is that grid term **plus** `0.01 × loss/tree`. With `loss/tree` around a median of **0.044** and a mean near **0.10**, the added term is about **0.0004–0.001**, the same size as the entire old loss or a few times larger. A printed epoch loss near **0.001–0.002** is the new scale working. Do not compare it with **0.000366**. The archive at `pre_per_tree_epoch2` is the old-scale reference. Epoch 3 printed **0.0021**.
+One epoch, from `best.pt` (step **110,242**), after `data-patch-chips-ignore`. Not from `latest.pt`. Export floor stays **0.20**.
 
-Within this new scale, later epochs **are** comparable to each other. The curves that say whether the map moved are `loss/tree` (best score within 2 m), `loss/neg`, and `loss/pos` (exact stake cell; it can rise while `loss/tree` falls). Rings per chip, at **0.20** and at **0.85**, are the map check (§32). The train loss is not.
+**For write-up:** The streaks were a missing flight line. The carpet term lowers mid-score unlabeled peaks and leaves the high ones alone.
 
-1. Tomorrow, once nothing is reading the chips: download the other flight line for each **500 m** square and rebuild the chips that have no points (§35). The index has to keep every file for a corner. Then `data-patch-chips-ignore`, then **one epoch** whose job is to stop the hallucinations (§33, §34). Patch so every stake in the tile is a positive (§30). Penalize the mid-score carpet and the chip-corner lattice. Leave a sharp high peak in place, including one on a crown the register does not list. Epoch 10 is still not the plan.
-2. Re-check the center at **0.20** and at **0.90**. Rings per chip at **0.20** should fall. Register trees this checkpoint already marks at **≥ 0.90** should still be detected.
-3. Height-summary channels from the stored points, then a **candidate network** whose training crops are **every** eligible register tree, including the ones the detector missed (§19, §36). PointNet verifier first; a small two-scale PointNet++ if poles and shrubs still pass (§37). It runs only on detections. Ghentree later shows that crop as an isometric still or a small interactive 3D view of the points (§25).
+---
+
+### 39. Anti-carpet BEV failed on the map; freeze epoch3_hot; PointNet verifier next (12 Nov, late morning)
+
+**What we tried.** After the second strip rebuild and `clear_stored_ignore` in training, we added `unknown_peak_loss` on unlabeled local maxima and ran resume epochs from epoch-3 weights:
+
+| Run | Config | Outcome |
+|-----|--------|---------|
+| **epoch4_flat** | weight **0.1**, band **[0.20, 0.90)**, mean of mid peaks | One full pass (~110k→143k steps). Printed loss **~0.021** (new scale). Live infer: **every score ~0.20**, **zero ≥ 0.90**, ~**700** preds vs **~1.6M** on epoch3 — **heatmap collapsed** to the export floor, not an infer bug. Archived: `archive/epoch4_flat/`. |
+| **epoch4b** (anticarpet) | weight **0.01**, band **[0.45, 0.88)**, focal on punished peaks; focal in [`treelidarnet/models/losses.py`](treelidarnet/models/losses.py) | Interrupted then resumed from `latest` @ **122k** → **155250**. `best.pt` promoted at printed **0.0039**. |
+| **Center QA** | `qa-checkpoint-center` on 400 central chips | Rings/chip @0.20: **59.2 → 58.0** (slight win). High-conf recall @0.90 (stakes that were ≥0.90 on baseline): **47/932 (~5%)** — **FAIL**. Reverted `best.pt` to **`epoch3_hot`**; candidate in `archive/epoch4b_qa_fail/`. |
+
+**Decision.** **Pause further anti-carpet BEV fine-tunes** until a recipe passes center QA (rings down **and** high-conf recall ≥ ~98%). **Ship the map on `epoch3_hot` only.** Export floor stays **0.20**; live slider **~0.85**. Mid-score carpet mostly sits **below 0.90**, so the high view is usable while we add a second stage.
+
+**Training wall clock vs steps.** A full index epoch is still **~33k** optimizer steps. Late epoch-3 **hours** were mostly **DataLoader / disk stalls and pauses** (patch, NaN restart), not slower GPU steps (~**17–21 ms** when the loop moves). Fast passes today are **uninterrupted stepping** with warm page cache — not shortened epochs.
+
+**Pivot: PointNet verifier (§36–37).** Train a small **tree / not-tree** classifier on **LiDAR crops** (~**512** points). **Positives:** every **eligible** register stake (including detector misses). **Negatives (v1):** GRB **building/road** crops and detector peaks only where the chip **`hard_negative`** mask is hot at the peak — **not** generic carpet or off-register mid scores labeled “not tree,” because many of those are **real unlisted canopy** (discoveries). At infer, run the verifier **only on detector proposals**; track **discovery retention**, not just FP drop on roads.
+
+**Ops added:** [`treelidarnet/qa_center.py`](treelidarnet/qa_center.py) + CLI `qa-checkpoint-center`; [`configs/gent_canopy_v2_anticarpet.yaml`](configs/gent_canopy_v2_anticarpet.yaml) for experiments; resume/archive helpers in [`treelidarnet/train.py`](treelidarnet/train.py).
+
+**For write-up:** The BEV detector is **good enough to freeze** at epoch3 for product QA; **carpet is a presentation + verifier problem**, not another blind BEV epoch. Labeling carpet peaks as negatives would teach the verifier to **kill discoveries**.
+
+---
+
+## Where we left off (12 Nov, late morning)
+
+**Detector:** `best.pt` === **`archive/epoch3_hot/best.pt`** (step **110242**, loss **0.0021**). Anti-carpet archived (`epoch4_flat`, `epoch4b_qa_fail`). **No BEV anti-carpet** until center QA passes. **Map:** export **0.20**, slider **~0.85**; carpet mostly **sub-0.90** at the hot checkpoint (§32).
+
+**Next:** PointNet verifier (§39) — register positives, GRB / `hard_negative` negatives only; track discovery retention.
+
+1. Implement crop extract + `data-build-crop-index` + train PointNet v1.
+2. Offline filter on center export; then optional `infer-gent --verifier`.
+3. Any future BEV change must pass **`qa-checkpoint-center`** before replacing `best.pt`.
 
 ---
 
@@ -807,6 +837,10 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 | 12 Nov ~00:21 | **Keep the high-confidence trees** while punishing the carpet | The grid is the **0.50–0.85** frame, **2–5 m** inside chip corners. From **0.90** that frame matches the area. The penalty must not be “far from a stake.” Trees already scored **≥ 0.90** are the set that has to survive |
 | 12 Nov ~00:15 | Live slider opens at **0.85**; rings draw **over** the green | Export floor stays **0.20**. The slider is how to look at a hot checkpoint. Amber on top so a detection is visible on its register tree |
 | 12 Nov ~00:36 | **Fetch the other flight line tomorrow** | **1,841** register chips have no points. The center query saved one strip per **500 m** square. The edge strip (same corner, other flight id) was never downloaded. Rebuild those chips before the next epoch, and read every file for that corner |
+| 12 Nov morning | **Second strip downloaded; penalize mid-score unlabeled peaks** | **1,864** new LAZ files. Index keeps every file per corner. Loss term is the mean of unlabeled local maxima in **[0.20, 0.90)**, weight **0.1**, **2 m** window. Peaks at **≥ 0.90** are outside it. One epoch from `best.pt` after the empty-chip rebuild and the ignore patch |
+| 12 Nov ~10:50 | **epoch4 flat map** | weight **0.1** collapsed scores to ~**0.20**; restore **`epoch3_hot`** |
+| 12 Nov ~11:10 | **epoch4b anticarpet + QA** | weight **0.01**, band **0.45–0.88**; center QA failed high-conf recall; revert **`best.pt`** |
+| 12 Nov ~11:20 | **Freeze BEV; PointNet verifier** | Carpet acceptable at **0.85** view; do **not** label carpet/discovery peaks as verifier negatives (§39) |
 
 ---
 
@@ -814,13 +848,15 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 
 | Item | Value / note |
 |------|----------------|
-| LAZ | Gent bbox DHMV II tiles under `data/raw/laz/`. One file per **500 m** corner. **25,979** chips have no points because the second flight line was never downloaded (§35) |
+| LAZ | Gent bbox DHMV II under `data/raw/laz/`. **1,864** extra files so a corner can have more than one flight line (§38). Empty chips are being rebuilt |
 | Chips (train) | ~10 686 register-skewed `.npz` |
 | Labels | ~59k eligible register points in chips |
 | v1 run | `runs/gent_real_v1/best.pt` — register matcher baseline |
 | v2 config | `configs/gent_canopy_v2.yaml` — 10 epochs planned |
 | v2 epoch loss (10.7k, 10 Nov) | ~0.000336 → ~0.000332; archived in `pre_full_grid_2025-11-11` |
-| v2 epoch loss (133k, 11 Nov) | Epoch 1 **0.000394**; epoch 2 **0.000366** (grid only) @ step 75,500. Epoch 3 total **0.0021** at step **110,242** (`best.pt`). That total includes `0.01 × loss/tree` |
+| v2 epoch loss (133k, 11 Nov) | Epoch 1 **0.000394**; epoch 2 **0.000366** (grid only) @ step 75,500. Epoch 3 total **0.0021** at step **110,242** (`epoch3_hot` / live `best.pt`). That total includes `0.01 × loss/tree` |
+| v2 failed anti-carpet (12 Nov) | **epoch4_flat** ~**0.021** @ 143k (flat heatmap). **epoch4b** ~**0.0039** @ 155k — QA fail, reverted |
+| v2 QA gate | `qa-checkpoint-center`: rings/chip + ≥0.90 stake recall on 400 center chips |
 | Smoke infer | 200 chips, epoch-1 checkpoint — low strict F1, meaningful discoveries |
 | Full live infer | 10 686 chips, `gent_canopy_v2/best.pt`, `ghent_live.html` |
 | Git | `2c5f620` cleared the ignore ring in code and put register chips first. The faster infer (§31) is the commit after that |
@@ -832,24 +868,24 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 | Heatmap σ | Per-tree from `stamomtrek` | In all built/patched chips |
 | Confidence GIF | 20%↔40% on the 10 Nov city export: 46,760 preds at 0.20, 981 at 0.40 |
 | Next loss | **Per-tree peak loss** weight **0.01**, fp32, grad clip **5.0** (§21). Then held-out **audit** F1 |
-| Later model | **Candidate network** (§19, §36, §37) | Crop of **every** eligible register tree, hit or missed. PointNet first, small PointNet++ if needed. Runs on detections only |
+| Later model | **Candidate network** (§19, §36, §37, §39) | **Active next step.** PointNet verifier; negatives = GRB + `hard_negative` peaks only, not carpet/discovery rows |
 
 ---
 
 ## Limitations and open threads
 
 - **Coverage:** Full **133k** chip index for **infer**; **train** oversamples **~10.7k** register chips (§16).
-- **Checkpoint:** Epoch 1 of the full-grid pass is only a new baseline; `best.pt` is lowest **train** loss. Audit and strict F1 are infer scores (§20), not the train objective.
-- **Loss:** Epoch 3 finished at **0.0021** (`best.pt`, step **110,242**). Per-tree peak loss (weight **0.01**) ran in **fp32** with grad clip **5.0** (§21). Unknown band is **5 m** (§22), and that is why the map hallucinates trees (§32, §33). The ignore ring is cleared in code; stored chips still have it until `data-patch-chips-ignore`, then one epoch whose job is to make empty ground lose.
+- **Checkpoint:** Live **`best.pt` is frozen to `epoch3_hot`**. Promote only after **`qa-checkpoint-center`** passes (§39).
+- **Loss / carpet:** Anti-carpet BEV experiments **hurt high-conf stakes** or **flattened** the map (§39). Carpet at export **0.20** is expected on epoch3; **0.85** view + **PointNet verifier** is the chosen path. Ignore ring cleared in train via `clear_stored_ignore`.
 - **Shape:** The U-Net sees averaged cells. Height above ground is stored per point and not used. A wider net is not the next step. Height-summary channels, then the crop model (§19, §24).
 - **Validation:** No held-out F1 in the train loop. After infer, the map shows audit F1 (primary) and strict F1 (secondary), frozen at the export floor.
 - **Large trees / clusters:** §10 + §14 — σ helps singles; **silent clusters** are weak/missing peaks, not mainly NMS.
 - **Threshold:** Export floor now **0.20** (infer); val tuning still future; slider on full map for QA.
 - **Multimodal:** Satellite + LiDAR raised by you; not implemented (DSM/DTM optional future).
-- **Candidate model:** Not started. Trains on a LiDAR crop of **every** eligible register tree, including misses (§19, §36). Architecture is a PointNet verifier, then a small two-scale PointNet++ if poles and shrubs still pass (§37). It runs only on detections. Leaf-off LiDAR will not reproduce full `sortiment`.
+- **Candidate model:** **Next implementation** (§39). PointNet on register crops + **GRB / hard_negative** negatives only; do not train on unlabeled canopy as label-0. Runs on detections at infer. Leaf-off LiDAR will not reproduce full `sortiment`.
 - **Flanders-wide / OSM:** Stated as later-stage generalization and optional alignment data.
-- **Ops:** QGIS + parallel heavy jobs compete with train/infer on same machine.
-- **Coverage holes:** **1,841** register chips have no LiDAR. The other flight line for those **500 m** squares is tomorrow’s download, then a rebuild of the empty chips (§35). Not while infer is reading them.
+- **Ops:** QGIS + parallel heavy jobs compete with train/infer on same machine. Training **stalls** on cold chip cache; warm cache gives ~**20 ms/step** (§39).
+- **Coverage holes:** Second-strip download and empty-chip rebuild **done** for training index (§38). Remaining east–west streak QA is separate from the verifier pivot.
 
 ---
 
@@ -864,8 +900,8 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 | [docs/DEV.md](docs/DEV.md) | Commands: train, infer-gent, live viewer |
 | [docs/VISUALIZATION.md](docs/VISUALIZATION.md) | Map layers and bundles |
 
-§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. Fill those chips tomorrow, before the next epoch. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs. §37: that classifier is a PointNet verifier first, then a small two-scale PointNet++ if poles and shrubs still pass.
+§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs. §37: that classifier is a PointNet verifier first, then a small two-scale PointNet++ if poles and shrubs still pass. §38: second strip on disk; empty-chip rebuild; first anti-carpet term at weight **0.1** (failed). §39: freeze **`epoch3_hot`**; light anti-carpet failed QA; **PointNet verifier** next with **safe negatives** (not carpet as label-0).
 
 ---
 
-*Design diary through 12 Nov 2026, 00:15: export confidence, live map, variable σ, full grid, tree oversampling, per-tree loss, the float16 NaN restart, the 5 m unknown band, what the U-Net does not see, a 3D LiDAR picture for Ghentree, center-outward inference, what `loss/train_step` is, why 0.25 m is enough to place a tree, clearing the ignore ring after this epoch, a faster infer that keeps the same grids, a hot epoch-3 map that is viewable near 0.85, the decision that the next epoch has to stop the hallucinations, the constraint that peaks already at 0.90 are the trees to keep, and the east–west streaks from a flight line to download tomorrow. The second model’s training crops are every eligible register tree, missed or not, and its network is PointNet first, then a small PointNet++ if the simple pool is not enough. For code state, see git history on `main`.*
+*Design diary through 12 Nov 2026, late morning: … second strip rebuild, failed anti-carpet BEV (flat epoch4 and QA-failed epoch4b), center QA gate, freeze epoch3_hot for the map, pivot to PointNet verifier with GRB/hard_negative negatives only (not discovery/carpet label-0), and wall-clock vs stepping time on the full chip index. For code state, see git history on `main`.*
