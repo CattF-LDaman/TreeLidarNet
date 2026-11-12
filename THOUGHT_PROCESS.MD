@@ -14,7 +14,7 @@ Mid-session we **pivoted** to *“find trees in Ghent broadly”* (canopy v2): k
 
 After map review, you asked for **more detections without retraining**: lower the **export confidence floor** from 0.35 to **0.20**, add a **confidence slider** on the full city map, and **re-infer** with live polling so rings fill in during the run.
 
-Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **variable-σ** heatmap patch. On 11 Nov we archived the pre-grid weights and started a long fine-tune. Most grid chips have **no register trees**; we **oversampled** the ~10.7k that do. Epoch 1 of that pass landed at loss **0.000394** with only a slight drop in smoothed `loss/pos`. **Per-tree peak loss** (weight **0.01**) is already in the config; a watcher starts it when epoch 2 finishes, so each missed stake can move the weights without a hard “every tree must be detected” rule. That term does **not** forbid discoveries. **Audit F1** is the score we read after infer; training still picks `best.pt` by train loss. Later, once detections are trustworthy, a **second network** scores each candidate on a small LiDAR crop: tree or not, and only a coarse structure class. It **trains on register trees**; the detector only chooses where to run it. The register itself stays the rich species table.
+Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **variable-σ** heatmap patch. On 11 Nov we archived the pre-grid weights and started a long fine-tune. Most grid chips have **no register trees**; we **oversampled** the ~10.7k that do. Epoch 1 of that pass landed at loss **0.000394** with only a slight drop in smoothed `loss/pos`. **Per-tree peak loss** (weight **0.01**) is already in the config; a watcher starts it when epoch 2 finishes, so each missed stake can move the weights without a hard “every tree must be detected” rule. That term does **not** forbid discoveries. **Audit F1** is the score we read after infer; training still picks `best.pt` by train loss. Later, once detections are trustworthy, a **second network** scores each candidate on a small LiDAR crop: tree or not, and only a coarse structure class. It **trains on every eligible register tree**, including stakes the detector missed. The detector only chooses where to run it. The register itself stays the rich species table.
 
 ---
 
@@ -39,7 +39,7 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **CHM** | Canopy height model: DSM − DTM. **CHM peaks** are hilltops on that height map (non-learned baseline). |
 | **Validation F1** | The same audit (and strict) scores on a **held-out** area. Not inside this train loop. Meant as a checkpoint check before the next full-city infer. |
 | **Per-tree peak loss** | Implemented, weight **0.01**. Starts when epoch 2 ends: focal penalty on the strongest prediction within **2 m** of each register peak. |
-| **Candidate network** | Later second model: LiDAR crop around a point → tree or not, optional coarse type. Trained on **register** trees; run on detections. |
+| **Candidate network** | Later second model. **Train** on a LiDAR crop of **every** eligible register tree, including stakes the detector missed. **Run** only on detections. Tree or not, then a coarse type. |
 
 ---
 
@@ -76,7 +76,7 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **12:59–14:30** | Little downward `loss/pos`? Bigger net? | Slight smooth decline is normal; do **not** widen the CNN yet |
 | **15:17** | Epoch 1 of this pass **finished** | Loss **0.000394**; epoch 2 started; **wait** before infer |
 | **16:05–16:14** | Diagnose training; validation F1; force every register tree? | Grid-mean loss dilutes misses. Next: **per-tree peak loss** after epochs 2–3. Val F1 is a later checkpoint check, not inside this loop |
-| **16:23–16:25** | Later: detections only, then a network for type / “is it a tree”? | **Second stage** on LiDAR crops. **Trains on register trees.** Species stays coarse (leaf-off LiDAR). Register remains the attribute table |
+| **16:23–16:25** | Later: detections only, then a network for type / “is it a tree”? | **Second stage** on LiDAR crops of **every** eligible register tree, including ones the detector missed. Species stays coarse. Register remains the attribute table |
 | **16:30–18:12** | Epoch 3 should already use the new loss; anything else before cutover? | Per-tree loss in config. Watcher snapshots epoch 2, then restarts. Weight **0.01** (not 1). Pushed `70376a9` |
 | **18:40–18:45** | Will discoveries survive? Is **5 m** a lot? Do we even use audit or strict F1? | Discoveries stay allowed. **5 m** is only the audit bucket (match is **3 m**, train/NMS **2 m**). Audit F1 is the infer score we look at; strict sits beside it; training ignores both |
 | **19:07–19:14** | Epoch 3 starts, then **NaN** at step **76,511** | `loss/tree` was falling (0.47 → 0.23). A saturated fp16 score became exactly 1, and `-log(1 - pred)` was NaN |
@@ -96,6 +96,7 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **12 Nov 00:17** | The model has to stop inventing trees | Slider hides the carpet. Next epoch penalizes unknown peaks. Discoveries of real unlisted crowns stay allowed |
 | **12 Nov 00:21** | High-confidence rings look like trees. Keep them | The 50 m grid is the **0.50–0.85** corner lattice. From **0.90** the frame is gone. The penalty must not use distance-to-stake, and trees already at **≥ 0.90** have to survive |
 | **12 Nov 00:36** | East–west streaks have no LiDAR. Fetch the other flight line tomorrow | **25,979** chips have zero points, **1,841** of them with register trees. The downloader saved the strip under the tile center. The strip that fills the northern edge was never requested |
+| **12 Nov 01:06** | Second model trains on every register tree | Crops come from **all** eligible stakes, including trees this detector never rang. Detections are where it **runs**, not where it **learns** |
 
 ---
 
@@ -432,7 +433,9 @@ Overlapping training Gaussians, stake vs crown, ~3 epochs, and register-skewed c
 | **Detector** (this training) | Where a tree might be: point + score |
 | **Candidate network** (later) | Small LiDAR crop around that point (or around a register stake): tree or not, and optionally a **coarse structure class** |
 
-**Training the second network uses register trees.** For each eligible `gis_id`, crop the LiDAR around the stake and teach “this is a tree,” plus `sortiment` when it is a real label (not `Te Bepalen`). Those crops exist even if the detector missed the tree. Add non-trees on purpose (GRB roofs and roads, detector peaks that are not canopy). Discoveries are not type labels until someone checks them.
+**Training positives are every eligible register tree.** For each eligible `gis_id`, crop the LiDAR around the stake and teach “this is a tree,” plus `sortiment` when it is a real label (not `Te Bepalen`). That includes stakes this detector never marked. A miss is still a tree, and those crowns are the ones the verifier most needs to have seen. The training set is the register, not the list of detections that happened to land on it (§36).
+
+Add non-trees on purpose (GRB roofs and roads, detector peaks that are not canopy). Discoveries are not type labels until someone checks them.
 
 **At inference,** the detector proposes points. The second network scores each point. If it falls within ~3 m of a register row, **attach** that row. Unmatched points stay discoveries with LiDAR scores only. The register is not re-learned as the species database.
 
@@ -440,7 +443,7 @@ Overlapping training Gaussians, stake vs crown, ~3 epochs, and register-skewed c
 
 **When.** After per-tree peak loss, held-out audit F1, and a city infer you trust. Then: detections-only export, crop dataset from register trees plus hard non-trees, **verifier first**, coarse type only if the verifier helps.
 
-**For write-up:** The map product is a list of candidates. The register labels the ones it already knows. LiDAR classification fills in “tree?” and a rough structure for the rest.
+**For write-up:** The map product is a list of candidates. The second model learns “tree” from every register stake, hit or missed. The register still labels the ones it already knows. LiDAR classification fills in “tree?” and a rough structure for the rest.
 
 ---
 
@@ -706,6 +709,18 @@ The downloader asked OpenLiDAR for one point in the middle of each square and sa
 
 ---
 
+### 36. The second model learns from every register tree (12 Nov, ~01:06)
+
+The crop dataset is built from the register, not from the detections.
+
+Every eligible stake gets a LiDAR crop labeled “this is a tree,” whether or not epoch 3 put a ring on it. The trees the detector misses — large crowns, clusters, a peak shifted off the stake — are part of that set. Training only on registry hits would teach the easy street trees and skip the crowns the first model fails. At inference the second model still runs only where the detector proposed a point. A miss can be in the training set and absent from the map until a later detector finds it.
+
+Non-trees are added on purpose: GRB roofs and roads, and detector peaks that are not canopy. A discovery stays unlabeled for type until someone checks it. Coarse structure only, after the tree-or-not call works (§19).
+
+**For write-up:** Detections choose where the second model is asked. The register, all of it, chooses what it studies.
+
+---
+
 ## Where we left off (12 Nov, ~00:53)
 
 The job now is to get this model away from hallucinating trees (§33). Epoch 3 is in `best.pt` (loss **0.0021**, step **110,242**). Training is stopped. The center at **0.20** is about **50 rings per chip**; at **0.85** it is about **5** (§32). The full live infer was stopped at **32,400 / 133,000** chips, **1,631,070** rings in `exports/inference/live/predictions.json`. A Google Earth snapshot of the **≥ 0.94** peaks is `exports/inference/gent_epoch3_live_conf94.kmz` (**16,641** points, from an earlier flush). Export floor stays **0.20**. The live slider starts at **0.85**. Rings draw over the register.
@@ -718,7 +733,7 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 
 1. Tomorrow, once nothing is reading the chips: download the other flight line for each **500 m** square and rebuild the chips that have no points (§35). The index has to keep every file for a corner. Then `data-patch-chips-ignore`, then **one epoch** whose job is to stop the hallucinations (§33, §34). Patch so every stake in the tile is a positive (§30). Penalize the mid-score carpet and the chip-corner lattice. Leave a sharp high peak in place, including one on a crown the register does not list. Epoch 10 is still not the plan.
 2. Re-check the center at **0.20** and at **0.90**. Rings per chip at **0.20** should fall. Register trees this checkpoint already marks at **≥ 0.90** should still be detected.
-3. Height-summary channels from the stored points, then a **candidate network** on the point crops (§19, §24). Ghentree later shows that crop as an isometric still or a small interactive 3D view of the points (§25).
+3. Height-summary channels from the stored points, then a **candidate network** whose training crops are **every** eligible register tree, including the ones the detector missed (§19, §36). It runs only on detections. Ghentree later shows that crop as an isometric still or a small interactive 3D view of the points (§25).
 
 ---
 
@@ -751,7 +766,8 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 | 11 Nov PM | **Per-tree peak loss** next, not mid-run | Equal penalty per stake; no hard “all trees detected” rule |
 | 11 Nov evening | Weight **0.01**; watcher snapshots epoch 2 immediately | Weight 1 would swamp the Gaussian (and variable σ); the finite-loss file only lasts ~500 steps |
 | 11 Nov PM | Val F1 is a **later check**, not a train loop | Held-out audit F1 vs archive before full-city infer |
-| 11 Nov ~16:25 | **Candidate network** after detection is solid | Crops trained on **register trees**; run on detections. Coarse type only; register keeps species |
+| 11 Nov ~16:25 | **Candidate network** after detection is solid | Train on a LiDAR crop of **every** eligible register tree, including misses. Run on detections. Coarse type only; register keeps species |
+| 12 Nov ~01:06 | **Emphasize: all register trees, not the matched detections** | The second model’s positives are the whole eligible register. Hits alone would be the easy trees. Inference still only scores detector proposals (§36) |
 | 11 Nov ~18:45 | **Discoveries stay allowed** under per-tree loss | Unknown mask unchanged; the new term only pulls within **2 m** of a stake |
 | 11 Nov ~18:45 | Keep the discovery line at **5 m** | Audit bucket only. Match is **3 m**. Generous for street spacing, tight when the crown peak is far from the stake |
 | 11 Nov ~18:45 | **Audit F1** is the infer score we read; **strict** is secondary | Both written at infer/eval and shown on the map. Training does not use either; `best.pt` stays lowest train loss |
@@ -800,7 +816,7 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 | Heatmap σ | Per-tree from `stamomtrek` | In all built/patched chips |
 | Confidence GIF | 20%↔40% on the 10 Nov city export: 46,760 preds at 0.20, 981 at 0.40 |
 | Next loss | **Per-tree peak loss** weight **0.01**, fp32, grad clip **5.0** (§21). Then held-out **audit** F1 |
-| Later model | **Candidate network** (§19) | Register-tree crops → tree? / coarse structure; detections-only export |
+| Later model | **Candidate network** (§19, §36) | Crop of **every** eligible register tree, hit or missed → tree? / coarse structure. Runs on detections only |
 
 ---
 
@@ -814,7 +830,7 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 - **Large trees / clusters:** §10 + §14 — σ helps singles; **silent clusters** are weak/missing peaks, not mainly NMS.
 - **Threshold:** Export floor now **0.20** (infer); val tuning still future; slider on full map for QA.
 - **Multimodal:** Satellite + LiDAR raised by you; not implemented (DSM/DTM optional future).
-- **Candidate model:** Not started. Second stage on LiDAR crops, trained on register trees, after the detector is worth trusting (§19). Leaf-off LiDAR will not reproduce full `sortiment`.
+- **Candidate model:** Not started. Second stage trains on a LiDAR crop of **every** eligible register tree, including stakes the detector missed (§19, §36). It runs only on detections. Leaf-off LiDAR will not reproduce full `sortiment`.
 - **Flanders-wide / OSM:** Stated as later-stage generalization and optional alignment data.
 - **Ops:** QGIS + parallel heavy jobs compete with train/infer on same machine.
 - **Coverage holes:** **1,841** register chips have no LiDAR. The other flight line for those **500 m** squares is tomorrow’s download, then a rebuild of the empty chips (§35). Not while infer is reading them.
@@ -832,8 +848,8 @@ Within this new scale, later epochs **are** comparable to each other. The curves
 | [docs/DEV.md](docs/DEV.md) | Commands: train, infer-gent, live viewer |
 | [docs/VISUALIZATION.md](docs/VISUALIZATION.md) | Map layers and bundles |
 
-§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. Fill those chips tomorrow, before the next epoch.
+§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. Fill those chips tomorrow, before the next epoch. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs.
 
 ---
 
-*Design diary through 12 Nov 2026, 00:15: export confidence, live map, variable σ, full grid, tree oversampling, per-tree loss, the float16 NaN restart, the 5 m unknown band, what the U-Net does not see, a 3D LiDAR picture for Ghentree, center-outward inference, what `loss/train_step` is, why 0.25 m is enough to place a tree, clearing the ignore ring after this epoch, a faster infer that keeps the same grids, a hot epoch-3 map that is viewable near 0.85, the decision that the next epoch has to stop the hallucinations, the constraint that peaks already at 0.90 are the trees to keep, and the east–west streaks from a flight line to download tomorrow. For code state, see git history on `main`.*
+*Design diary through 12 Nov 2026, 00:15: export confidence, live map, variable σ, full grid, tree oversampling, per-tree loss, the float16 NaN restart, the 5 m unknown band, what the U-Net does not see, a 3D LiDAR picture for Ghentree, center-outward inference, what `loss/train_step` is, why 0.25 m is enough to place a tree, clearing the ignore ring after this epoch, a faster infer that keeps the same grids, a hot epoch-3 map that is viewable near 0.85, the decision that the next epoch has to stop the hallucinations, the constraint that peaks already at 0.90 are the trees to keep, and the east–west streaks from a flight line to download tomorrow. The second model’s training crops are every eligible register tree, missed or not. For code state, see git history on `main`.*
