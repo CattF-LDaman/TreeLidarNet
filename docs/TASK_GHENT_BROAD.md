@@ -53,6 +53,12 @@ Discoveries and canopy maps are **research / exploration** outputs — not offic
 
 ---
 
+## Second stage (crop verifier)
+
+BEV `epoch3_hot` stays frozen for proposals. A **PointNet++** model on ~512-point LiDAR crops filters each detection (tree vs not-tree). Train on **every eligible register stake** plus GRB / `hard_negative` negatives—not carpet or off-register mid scores. See [SPEC.md](SPEC.md) §6.5 and [THOUGHT_PROCESS.MD](../THOUGHT_PROCESS.MD) §37.
+
+---
+
 ## Out of scope (v2.0)
 
 - DHMV-era RGB / satellite fusion (v2.1)

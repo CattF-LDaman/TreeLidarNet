@@ -34,6 +34,9 @@ def infer_chip(
     export_path: Path | None = None,
     model_id: str = "gent_bev_v1",
     score_threshold: float = DEFAULT_PEAK_SCORE_THRESHOLD,
+    verifier_checkpoint: Path | None = None,
+    verifier_threshold: float | None = None,
+    verifier_radius_m: float = 8.0,
 ) -> Path:
     npz = chips_dir() / f"{chip_id}.npz"
     if not npz.is_file():
@@ -54,6 +57,20 @@ def infer_chip(
         cell_size=CELL_SIZE_M,
         score_threshold=score_threshold,
     )
+    if verifier_checkpoint is not None:
+        from treelidarnet.verifier import score_detections
+
+        preds = score_detections(
+            preds,
+            checkpoint=verifier_checkpoint,
+            radius_m=verifier_radius_m,
+        )
+        if verifier_threshold is not None:
+            preds = [
+                p
+                for p in preds
+                if p.verifier_score is not None and p.verifier_score >= verifier_threshold
+            ]
     df = pd.read_parquet(trees_parquet)
     chip_size = grid_cells() * CELL_SIZE_M
     m = (

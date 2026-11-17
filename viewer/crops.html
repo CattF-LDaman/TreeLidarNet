@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TreeLidarNet — Crop QA + verifier</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; width: 100%; overflow: hidden; }
+    body { background: #0d1117; color: #e6edf3; font-family: system-ui, sans-serif; display: flex; flex-direction: column; }
+    #layout { flex: 1; display: flex; min-height: 0; width: 100%; }
+    #map-pane { flex: 1 1 58%; min-width: 0; position: relative; min-height: 0; }
+    #map { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #dock {
+      flex: 0 0 42%; max-width: 520px; min-width: 300px;
+      border-left: 1px solid #30363d; display: flex; flex-direction: column;
+      background: #010409;
+    }
+    #crop-canvas { flex: 1; min-height: 220px; width: 100%; display: block; touch-action: none; }
+    .panel {
+      padding: 0.75rem 1rem; font-size: 0.78rem; line-height: 1.45;
+      border-bottom: 1px solid #30363d; background: rgba(13,17,23,0.95);
+    }
+    .panel h1 { font-size: 0.95rem; margin: 0 0 0.35rem; color: #7ee787; }
+    .meta { color: #8b949e; margin-top: 0.35rem; }
+    .meta b { color: #c9d1d9; }
+    label { display: flex; align-items: center; gap: 0.4rem; margin: 0.25rem 0; cursor: pointer; font-size: 0.75rem; }
+    #gpu-status { color: #6e7681; font-size: 0.68rem; margin-top: 0.25rem; }
+    #map-toolbar {
+      position: absolute; z-index: 2; top: 0.75rem; left: 0.75rem;
+      background: rgba(13,17,23,0.92); padding: 0.65rem 0.8rem; border-radius: 0.5rem;
+      border: 1px solid #30363d; font-size: 0.72rem; max-width: 18rem; max-height: calc(100% - 2rem); overflow-y: auto;
+    }
+    input[type="text"], input[type="range"] { width: 100%; margin-top: 0.2rem; }
+    input[type="text"] {
+      padding: 0.25rem 0.35rem; background: #161b22; border: 1px solid #30363d;
+      color: #e6edf3; border-radius: 4px; font-size: 0.72rem;
+    }
+  .score-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.45rem; font-size: 0.72rem; }
+  .score-row span { width: 5.5rem; color: #8b949e; flex-shrink: 0; }
+    .bar { flex: 1; height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; }
+    .bar i { display: block; height: 100%; border-radius: 4px; transition: width 0.2s; }
+    .bar-bev i { background: linear-gradient(90deg, #b45309, #fbbf24); }
+    .bar-ver i { background: linear-gradient(90deg, #f87171, #34d399); }
+    #live-status { margin-top: 0.4rem; padding: 0.35rem 0.5rem; border-radius: 4px; background: #161b22; color: #8b949e; font-size: 0.68rem; }
+    #map-tip {
+      display: none; position: fixed; z-index: 5; pointer-events: none;
+      padding: 0.45rem 0.6rem; font-size: 0.72rem; border-radius: 6px;
+      background: rgba(13,17,23,0.95); border: 1px solid #30363d; max-width: 14rem;
+    }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 0.25rem; }
+  </style>
+</head>
+<body>
+  <div id="layout">
+    <div id="map-pane">
+      <div id="map"></div>
+      <div id="map-tip"></div>
+      <div id="map-toolbar">
+        <div><b>Click</b> green stake or ring — LiDAR crop + scores on the right.</div>
+        <label><input type="checkbox" id="show-register" checked> Register (green)</label>
+        <label><input type="checkbox" id="show-preds" checked> Predictions</label>
+        <label><input type="checkbox" id="discoveries-only"> Discoveries only</label>
+        <label id="discovery-slider-wrap" style="display:none;margin-left:0.5rem">
+          Min dist from register <span id="discovery-min-label">2.0</span> m
+          <input type="range" id="discovery-min-m" min="1" max="15" step="0.5" value="2">
+        </label>
+        <label>Click scoring
+          <select id="verifier-mode" style="width:100%;margin-top:0.2rem;padding:0.2rem;background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:4px">
+            <option value="compare" selected>Compare v2 + v3</option>
+            <option value="v2">v2 only (6 ch, no RGB)</option>
+            <option value="v3">v3 only (9 ch + RGB)</option>
+          </select>
+        </label>
+        <div style="font-size:0.65rem;color:#6e7681;margin-top:0.2rem">
+          Compare halos: outer blue = v2, inner green/red = v3 (dual
+          <code>filter-export --live</code>). Dropdown switches halos + clicks.
+        </div>
+        <label><input type="checkbox" id="live-poll" checked> Live verifier scoring (poll API)</label>
+        <label>Min BEV <span id="bev-min-label">0.85</span>
+          <input type="range" id="bev-min" min="0.2" max="0.95" step="0.05" value="0.85">
+        </label>
+        <label>Min verifier <span id="ver-min-label">0.00</span>
+          <input type="range" id="ver-min" min="0" max="0.95" step="0.05" value="0">
+        </label>
+        <div style="margin-top:0.35rem;font-size:0.68rem;color:#6e7681">
+          <span class="legend-dot" style="background:#fbbf24"></span> BEV ring ·
+          <span class="legend-dot" style="background:#60a5fa"></span> v2 halo (outer) ·
+          <span class="legend-dot" style="background:#34d399"></span> v3 high ·
+          <span class="legend-dot" style="background:#f87171"></span> low score
+        </div>
+        <label style="margin-top:0.4rem">Export path (server)</label>
+        <input type="text" id="pred-path" value="exports/inference/gent_city_gent_canopy_v2.json.gz">
+        <div id="live-status">Live: off</div>
+        <div id="map-stats" style="margin-top:0.4rem;color:#8b949e"></div>
+      </div>
+    </div>
+    <div id="dock">
+      <div class="panel">
+        <h1>LiDAR crop</h1>
+        <div id="crop-meta" class="meta">Select a tree on the map.</div>
+        <div class="score-row"><span>BEV</span><div class="bar bar-bev"><i id="bar-bev" style="width:0%"></i></div><b id="val-bev">—</b></div>
+        <div class="score-row" id="row-ver-v2"><span>Ver v2</span><div class="bar bar-ver"><i id="bar-ver-v2" style="width:0%"></i></div><b id="val-ver-v2">—</b></div>
+        <div class="score-row" id="row-ver-v3"><span>Ver v3</span><div class="bar bar-ver"><i id="bar-ver-v3" style="width:0%"></i></div><b id="val-ver-v3">—</b></div>
+        <div id="gpu-status">Initializing 3D…</div>
+      </div>
+      <canvas id="crop-canvas"></canvas>
+    </div>
+  </div>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.webgpu.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/deck.gl@9.2.7/dist.min.js"></script>
+  <script src="map_layers.js"></script>
+  <script src="crops_map.js"></script>
+</body>
+</html>

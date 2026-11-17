@@ -28,6 +28,11 @@ sampler:
 
 # Cutover already happened. Resume keeps Adam so a pause does not cold-start the epoch.
 resume_weights_only: false
+# latest.pt is a few hundred steps of the old loss. This pass starts from the
+# finished epoch-3 checkpoint and runs once. The printed loss will not beat
+# 0.0021, so the baseline is reset after epoch 3 is copied aside.
+# Anti-carpet pass uses configs/gent_canopy_v2_anticarpet.yaml — not this file.
+clear_stored_ignore: true
 
 loss:
   alpha: 2.0
@@ -37,6 +42,7 @@ loss:
   # fp16 rounded a saturated score to 1 and the next step became NaN.
   per_tree_weight: 0.01
   per_tree_radius_m: 2.0
+  unknown_peak_weight: 0.0
 # Stored in each chip's unknown array (not read at train time). 5 m leaves
 # front-garden trees just outside the stake unlabeled. Patched 11 Nov 2026.
 unknown_band_m: 5.0

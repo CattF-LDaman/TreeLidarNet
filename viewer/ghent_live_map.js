@@ -1,7 +1,10 @@
 (function () {
   "use strict";
 
-  var LIVE = "../exports/inference/live/";
+  var LIVE =
+    window.location.pathname.indexOf("/viewer/") >= 0
+      ? "/exports/inference/live/"
+      : "../exports/inference/live/";
   var POLL_MS = 2000;
   var stats = document.getElementById("stats");
   var prog = document.getElementById("prog");

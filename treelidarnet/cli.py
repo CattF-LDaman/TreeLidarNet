@@ -10,10 +10,15 @@ from pathlib import Path
 from treelidarnet.baseline.chm import chm_peaks_for_paths
 from treelidarnet.data.build_chips import build_chips_for_origins, discover_laz_dir
 from treelidarnet.data.build_gent import build_gent_chips
-from treelidarnet.data.build_gent_grid import build_gent_grid_chips
+from treelidarnet.data.build_gent_grid import build_gent_grid_chips, rebuild_empty_chips
 from treelidarnet.data.download_grb import download_gent_grb
-from treelidarnet.data.download_laz import download_gent_laz
+from treelidarnet.data.download_laz import download_gent_laz, download_missing_strips
 from treelidarnet.data.import_gent import DEFAULT_EXPORT_URL, import_gent_geojson
+from treelidarnet.data.patch_chip_rgb import (
+    default_crops_index,
+    default_dtm_path,
+    patch_chips_rgb,
+)
 from treelidarnet.data.patch_grb_masks import patch_chips_grb
 from treelidarnet.data.patch_heatmaps import (
     patch_chips_clear_ignore,
@@ -30,7 +35,12 @@ from treelidarnet.eval import eval_detections, load_ground_truths
 from treelidarnet.infer import infer_chip
 from treelidarnet.infer_city import infer_gent_city
 from treelidarnet.paths import manifests_dir, repo_root
+from treelidarnet.qa_center import compare_center_checkpoints, promote_or_revert
+from treelidarnet.data.build_crop_index import build_crop_index
 from treelidarnet.train import train_from_config
+from treelidarnet.train_crop import train_crop_from_config
+from treelidarnet.crop_qa_server import serve_crop_qa
+from treelidarnet.verify_export import filter_export
 
 
 def _cmd_data_import_gent(args: argparse.Namespace) -> int:
@@ -59,12 +69,16 @@ def _cmd_data_write_split_meta(args: argparse.Namespace) -> int:
 
 
 def _cmd_data_download_laz(args: argparse.Namespace) -> int:
-    manifest = download_gent_laz(
-        trees_parquet=Path(args.trees),
-        dest_dir=Path(args.dest),
-        max_workers=int(args.workers),
-        limit=int(args.limit) if args.limit else None,
-    )
+    kwargs = {
+        "trees_parquet": Path(args.trees),
+        "dest_dir": Path(args.dest),
+        "max_workers": int(args.workers),
+        "limit": int(args.limit) if args.limit else None,
+    }
+    if args.strips:
+        manifest = download_missing_strips(**kwargs)
+    else:
+        manifest = download_gent_laz(**kwargs)
     print(f"Manifest: {manifest}")
     return 0
 
@@ -115,6 +129,21 @@ def _cmd_data_build_gent_grid(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_data_rebuild_empty_chips(args: argparse.Namespace) -> int:
+    dtm = Path(args.dtm) if args.dtm else None
+    grb_dir = Path(args.grb_dir) if args.grb_dir else None
+    rebuild_empty_chips(
+        trees_parquet=Path(args.trees),
+        laz_dir=Path(args.laz_dir),
+        index_parquet=Path(args.index) if args.index else None,
+        dtm_path=dtm,
+        grb_dir=grb_dir,
+        road_buffer_m=float(args.road_buffer_m),
+        limit=int(args.limit) if args.limit else None,
+    )
+    return 0
+
+
 def _cmd_data_patch_chips_ignore(args: argparse.Namespace) -> int:
     index = Path(args.index) if args.index else manifests_dir() / "chips_index_full.parquet"
     patch_chips_clear_ignore(
@@ -131,6 +160,28 @@ def _cmd_data_patch_chips_unknown(args: argparse.Namespace) -> int:
         index_parquet=index,
         unknown_band_m=float(args.band_m),
         limit=int(args.limit) if args.limit else None,
+    )
+    return 0
+
+
+def _cmd_data_patch_chips_rgb(args: argparse.Namespace) -> int:
+    dtm = Path(args.dtm) if args.dtm else default_dtm_path()
+    crops = Path(args.crops_index) if args.crops_index else default_crops_index()
+    chips_index = Path(args.chips_index) if args.chips_index else None
+    use_all = bool(args.all_chips)
+    patch_chips_rgb(
+        laz_dir=Path(args.laz_dir),
+        dtm_path=dtm,
+        crops_index=None if use_all or chips_index else crops,
+        chips_index=chips_index,
+        all_chips=use_all,
+        limit=int(args.limit) if args.limit else None,
+        skip_existing=not args.force,
+        jobs=int(args.jobs),
+        offset=int(args.offset),
+        only_missing_rgb=bool(args.only_missing_rgb),
+        refresh_missing_manifest=bool(args.refresh_missing_manifest),
+        register_chips=bool(args.register_chips),
     )
     return 0
 
@@ -187,6 +238,75 @@ def _cmd_train(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_train_crop(args: argparse.Namespace) -> int:
+    ckpt = train_crop_from_config(
+        Path(args.config),
+        run_name=args.run_name,
+        tensorboard=not args.no_tensorboard,
+    )
+    print(f"Checkpoint: {ckpt}")
+    return 0
+
+
+def _cmd_data_build_crop_index(args: argparse.Namespace) -> int:
+    chips_index = Path(args.chips_index) if args.chips_index else None
+    build_crop_index(
+        trees_parquet=Path(args.trees),
+        chips_index=chips_index,
+        out_path=Path(args.out),
+        split_meta_path=Path(args.split_meta) if args.split_meta else None,
+        positives_only=bool(args.positives_only),
+        grb_negatives_per_chip=int(args.grb_per_chip),
+        grb_max_chips=int(args.grb_max_chips),
+        limit=int(args.limit) if args.limit else None,
+        seed=int(args.seed),
+    )
+    return 0
+
+
+def _cmd_serve_crop_qa(args: argparse.Namespace) -> int:
+    serve_crop_qa(
+        host=args.host,
+        port=int(args.port),
+        trees_parquet=Path(args.trees) if args.trees else None,
+        predictions_export=Path(args.predictions) if args.predictions else None,
+        verifier_checkpoint=Path(args.verifier) if args.verifier else None,
+        verifier_v2=Path(args.verifier_v2) if args.verifier_v2 else None,
+        verifier_v3=Path(args.verifier_v3) if args.verifier_v3 else None,
+        radius_m=float(args.radius_m),
+        num_points=int(args.num_points),
+    )
+    return 0
+
+
+def _cmd_filter_export(args: argparse.Namespace) -> int:
+    verifier = args.verifier or args.verifier_v3
+    if not verifier:
+        print("filter-export: provide --verifier or --verifier-v3", file=sys.stderr)
+        return 2
+    common = dict(
+        in_path=Path(args.input),
+        out_path=Path(args.output),
+        verifier_checkpoint=Path(verifier),
+        trees_parquet=Path(args.trees),
+        verifier_threshold=float(args.verifier_threshold),
+        discovery_m=float(args.discovery_m),
+        register_m=float(args.register_m),
+        radius_m=float(args.radius_m),
+        limit=int(args.limit) if args.limit else None,
+        require_chip_rgb=bool(args.require_chip_rgb),
+        verifier_checkpoint_v2=Path(args.verifier_v2) if args.verifier_v2 else None,
+        verifier_checkpoint_v3=Path(args.verifier_v3) if args.verifier_v3 else None,
+    )
+    if args.live:
+        from treelidarnet.filter_export_live import filter_export_live
+
+        filter_export_live(**common, bev_min=float(args.bev_min))
+    else:
+        filter_export(**common)
+    return 0
+
+
 def _cmd_eval(args: argparse.Namespace) -> int:
     from treelidarnet.postprocess import Detection
 
@@ -212,6 +332,8 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
 
 def _cmd_infer(args: argparse.Namespace) -> int:
+    verifier = Path(args.verifier) if args.verifier else None
+    vthresh = float(args.verifier_threshold) if args.verifier else None
     out = infer_chip(
         checkpoint=Path(args.checkpoint),
         chip_id=args.chip_id,
@@ -219,15 +341,45 @@ def _cmd_infer(args: argparse.Namespace) -> int:
         export_path=Path(args.export) if args.export else None,
         model_id=args.model_id,
         score_threshold=float(args.score_threshold),
+        verifier_checkpoint=verifier,
+        verifier_threshold=vthresh,
+        verifier_radius_m=float(args.verifier_radius_m),
     )
     print(f"Export: {out}")
     return 0
+
+
+def _cmd_qa_checkpoint_center(args: argparse.Namespace) -> int:
+    result = compare_center_checkpoints(
+        baseline_ckpt=Path(args.baseline),
+        candidate_ckpt=Path(args.candidate),
+        limit=int(args.limit),
+        export_floor=float(args.score_threshold),
+        high_thresh=float(args.high_thresh),
+    )
+    print(result.notes, flush=True)
+    print(
+        f"PASS={result.passed} "
+        f"baseline_rings/chip={result.baseline_rings_per_chip:.2f} "
+        f"candidate_rings/chip={result.candidate_rings_per_chip:.2f} "
+        f"high_recall={result.high_conf_recall:.3f}",
+        flush=True,
+    )
+    if args.revert_on_fail:
+        promote_or_revert(
+            result=result,
+            baseline_ckpt=Path(args.baseline),
+            candidate_ckpt=Path(args.candidate),
+        )
+    return 0 if result.passed else 1
 
 
 def _cmd_infer_gent(args: argparse.Namespace) -> int:
     chips_index = Path(args.chips_index) if args.chips_index else None
     if chips_index is not None and not chips_index.is_file():
         chips_index = None
+    verifier = Path(args.verifier) if args.verifier else None
+    vthresh = float(args.verifier_threshold) if args.verifier else None
     out = infer_gent_city(
         checkpoint=Path(args.checkpoint),
         trees_parquet=Path(args.trees),
@@ -237,10 +389,14 @@ def _cmd_infer_gent(args: argparse.Namespace) -> int:
         limit=int(args.limit) if args.limit else None,
         chips_index=chips_index,
         live=args.live,
+        resume_live=bool(args.resume_live),
         live_flush_every=int(args.live_flush_every),
         progress_every=int(args.progress_every),
         score_threshold=float(args.score_threshold),
         num_workers=int(args.num_workers),
+        verifier_checkpoint=verifier,
+        verifier_threshold=vthresh,
+        verifier_radius_m=float(args.verifier_radius_m),
     )
     print(f"Export: {out}")
     return 0
@@ -269,6 +425,11 @@ def main(argv: list[str] | None = None) -> int:
     p_dl.add_argument("--dest", default="data/raw/laz")
     p_dl.add_argument("--workers", default="6")
     p_dl.add_argument("--limit", default=None, help="Max 500m tiles (testing)")
+    p_dl.add_argument(
+        "--strips",
+        action="store_true",
+        help="Probe each square and download flight lines the center point missed",
+    )
     p_dl.set_defaults(func=_cmd_data_download_laz)
 
     p_bg = sub.add_parser("data-build-gent-chips", help="Build npz chips for all eligible trees")
@@ -325,6 +486,46 @@ def main(argv: list[str] | None = None) -> int:
     p_hm_patch.add_argument("--limit", default=None)
     p_hm_patch.set_defaults(func=_cmd_data_patch_chips_heatmap)
 
+    p_rgb_patch = sub.add_parser(
+        "data-patch-chips-rgb",
+        help="Attach DHMV RGB to chip npz (crop verifier; no BEV change)",
+    )
+    p_rgb_patch.add_argument("--laz-dir", default="data/raw/laz")
+    p_rgb_patch.add_argument("--dtm", default=None)
+    p_rgb_patch.add_argument("--crops-index", default=None, help="default: crops_index.parquet chip ids")
+    p_rgb_patch.add_argument("--chips-index", default=None, help="override chip id list from parquet")
+    p_rgb_patch.add_argument("--all-chips", action="store_true", help="scan every npz under data/processed/chips")
+    p_rgb_patch.add_argument("--force", action="store_true", help="rewrite rgb even when present")
+    p_rgb_patch.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="parallel chip workers (2–4 on a laptop; each reads LAZ)",
+    )
+    p_rgb_patch.add_argument("--limit", default=None)
+    p_rgb_patch.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="skip first N chip ids (sorted) to resume a full-grid run",
+    )
+    p_rgb_patch.add_argument(
+        "--only-missing-rgb",
+        action="store_true",
+        help="patch only npz without valid rgb (uses chips_missing_rgb.parquet if present)",
+    )
+    p_rgb_patch.add_argument(
+        "--refresh-missing-manifest",
+        action="store_true",
+        help="re-scan all chips for missing rgb instead of chips_missing_rgb.parquet",
+    )
+    p_rgb_patch.add_argument(
+        "--register-chips",
+        action="store_true",
+        help="only chips used by register crop rows in crops_index (train v3 priority)",
+    )
+    p_rgb_patch.set_defaults(func=_cmd_data_patch_chips_rgb)
+
     p_grid = sub.add_parser(
         "data-build-gent-grid",
         help="50 m grid chips over Gent bbox → chips_index_full.parquet",
@@ -339,6 +540,19 @@ def main(argv: list[str] | None = None) -> int:
         help="Do not rebuild npz that already exist (resume grid after patch)",
     )
     p_grid.set_defaults(func=_cmd_data_build_gent_grid)
+
+    p_empty = sub.add_parser(
+        "data-rebuild-empty-chips",
+        help="Rebuild chips with no points, using every LAZ flight line for the corner",
+    )
+    p_empty.add_argument("--trees", default=str(manifests_dir() / "gent_trees.parquet"))
+    p_empty.add_argument("--laz-dir", default="data/raw/laz")
+    p_empty.add_argument("--index", default=None)
+    p_empty.add_argument("--dtm", default=None)
+    p_empty.add_argument("--grb-dir", default=None)
+    p_empty.add_argument("--road-buffer-m", default="2.0")
+    p_empty.add_argument("--limit", default=None)
+    p_empty.set_defaults(func=_cmd_data_rebuild_empty_chips)
 
     p_chips = sub.add_parser("data-build-chips", help="Build npz chips from LAZ")
     p_chips.add_argument("--laz-dir", required=True)
@@ -368,9 +582,71 @@ def main(argv: list[str] | None = None) -> int:
     p_train.add_argument(
         "--resume",
         action="store_true",
-        help="Continue from runs/<run_name>/latest.pt (or best.pt)",
+        help="Continue from resume_from in the config (default latest.pt, else best.pt)",
     )
     p_train.set_defaults(func=_cmd_train)
+
+    p_crop_idx = sub.add_parser("data-build-crop-index", help="Build crops_index.parquet for verifier")
+    p_crop_idx.add_argument("--trees", default=str(manifests_dir() / "gent_trees.parquet"))
+    p_crop_idx.add_argument(
+        "--chips-index",
+        default=str(manifests_dir() / "chips_index_full.parquet"),
+    )
+    p_crop_idx.add_argument("--out", default=str(manifests_dir() / "crops_index.parquet"))
+    p_crop_idx.add_argument("--split-meta", default=None)
+    p_crop_idx.add_argument("--positives-only", action="store_true")
+    p_crop_idx.add_argument("--grb-per-chip", default="2")
+    p_crop_idx.add_argument(
+        "--grb-max-chips",
+        default="15000",
+        help="Cap how many chips are scanned for GRB hard-negative samples",
+    )
+    p_crop_idx.add_argument("--limit", default=None)
+    p_crop_idx.add_argument("--seed", default="42")
+    p_crop_idx.set_defaults(func=_cmd_data_build_crop_index)
+
+    p_train_crop = sub.add_parser("train-crop", help="Train PointNet++ crop verifier")
+    p_train_crop.add_argument("--config", default="configs/gent_crop_verifier_v1.yaml")
+    p_train_crop.add_argument("--run-name", default=None)
+    p_train_crop.add_argument("--no-tensorboard", action="store_true")
+    p_train_crop.set_defaults(func=_cmd_train_crop)
+
+    p_filter = sub.add_parser("filter-export", help="Score and filter a BEV export with the verifier")
+    p_filter.add_argument("--input", required=True, help="Input city export .json.gz")
+    p_filter.add_argument("--output", required=True, help="Filtered export .json.gz")
+    p_filter.add_argument(
+        "--verifier",
+        default=None,
+        help="Crop verifier checkpoint (alias for --verifier-v3)",
+    )
+    p_filter.add_argument(
+        "--verifier-v2",
+        default=None,
+        help="With --live + --verifier-v3: dual-score map halos (v2 vs v3)",
+    )
+    p_filter.add_argument("--verifier-v3", default=None, help="RGB verifier checkpoint")
+    p_filter.add_argument("--trees", default=str(manifests_dir() / "gent_trees.parquet"))
+    p_filter.add_argument("--verifier-threshold", default="0.5")
+    p_filter.add_argument("--discovery-m", default="5.0")
+    p_filter.add_argument("--register-m", default="3.0")
+    p_filter.add_argument("--radius-m", default="8.0")
+    p_filter.add_argument("--limit", default=None)
+    p_filter.add_argument(
+        "--live",
+        action="store_true",
+        help="Stream scored predictions to exports/inference/live/ for crop QA map",
+    )
+    p_filter.add_argument(
+        "--bev-min",
+        default="0.0",
+        help="Only score BEV detections with score >= this (e.g. 0.9)",
+    )
+    p_filter.add_argument(
+        "--require-chip-rgb",
+        action="store_true",
+        help="Only score detections on chips with valid rgb (v3 QA)",
+    )
+    p_filter.set_defaults(func=_cmd_filter_export)
 
     p_eval = sub.add_parser("eval", help="Evaluate prediction JSON")
     p_eval.add_argument("--predictions", required=True)
@@ -396,6 +672,13 @@ def main(argv: list[str] | None = None) -> int:
         default="0.2",
         help="Minimum model confidence (0–1) to export a peak",
     )
+    p_infer.add_argument("--verifier", default=None, help="Crop verifier checkpoint")
+    p_infer.add_argument(
+        "--verifier-threshold",
+        default="0.5",
+        help="Minimum verifier score when --verifier is set",
+    )
+    p_infer.add_argument("--verifier-radius-m", default="8.0")
     p_infer.set_defaults(func=_cmd_infer)
 
     p_city = sub.add_parser("infer-gent", help="Infer all chips → city map JSON.gz")
@@ -423,6 +706,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Write exports/inference/live/ for ghent_live.html polling",
     )
+    p_city.add_argument(
+        "--resume-live",
+        action="store_true",
+        help="Continue --live infer from exports/inference/live/status.json (does not reset preds)",
+    )
     p_city.add_argument("--live-flush-every", default="150")
     p_city.add_argument("--progress-every", default="50")
     p_city.add_argument(
@@ -430,7 +718,63 @@ def main(argv: list[str] | None = None) -> int:
         default="0.2",
         help="Minimum model confidence (0–1) to export a peak",
     )
+    p_city.add_argument("--verifier", default=None, help="Crop verifier checkpoint path")
+    p_city.add_argument(
+        "--verifier-threshold",
+        default="0.5",
+        help="Drop detections below this verifier score when --verifier is set",
+    )
+    p_city.add_argument("--verifier-radius-m", default="8.0")
     p_city.set_defaults(func=_cmd_infer_gent)
+
+    p_crop_qa = sub.add_parser(
+        "serve-crop-qa",
+        help="Crop JSON API + Deck.GL / WebGPU viewer (localhost)",
+    )
+    p_crop_qa.add_argument("--host", default="127.0.0.1")
+    p_crop_qa.add_argument("--port", default="8765")
+    p_crop_qa.add_argument("--trees", default=None)
+    p_crop_qa.add_argument("--predictions", default=None, help="City export .json.gz for pred layer")
+    p_crop_qa.add_argument(
+        "--verifier",
+        default=None,
+        help="Legacy: sets v3 checkpoint if --verifier-v3 omitted",
+    )
+    p_crop_qa.add_argument(
+        "--verifier-v2",
+        default=None,
+        help="6-ch LiDAR verifier (default runs/gent_crop_verifier_v2/best.pt)",
+    )
+    p_crop_qa.add_argument(
+        "--verifier-v3",
+        default=None,
+        help="9-ch RGB verifier (default runs/gent_crop_verifier_v3_rgb/best.pt)",
+    )
+    p_crop_qa.add_argument("--radius-m", default="8.0")
+    p_crop_qa.add_argument("--num-points", default="512")
+    p_crop_qa.set_defaults(func=_cmd_serve_crop_qa)
+
+    p_qa = sub.add_parser(
+        "qa-checkpoint-center",
+        help="Compare baseline vs candidate on central chips (rings/chip, high-conf recall)",
+    )
+    p_qa.add_argument(
+        "--baseline",
+        default=str(repo_root() / "runs/gent_canopy_v2/archive/epoch3_hot/best.pt"),
+    )
+    p_qa.add_argument(
+        "--candidate",
+        default=str(repo_root() / "runs/gent_canopy_v2/best.pt"),
+    )
+    p_qa.add_argument("--limit", type=int, default=400)
+    p_qa.add_argument("--score-threshold", default="0.2")
+    p_qa.add_argument("--high-thresh", default="0.9")
+    p_qa.add_argument(
+        "--revert-on-fail",
+        action="store_true",
+        help="Copy baseline back to runs/gent_canopy_v2/best.pt if QA fails",
+    )
+    p_qa.set_defaults(func=_cmd_qa_checkpoint_center)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

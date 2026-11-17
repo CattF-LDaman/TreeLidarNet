@@ -46,6 +46,14 @@ uv run treelidarnet train --config configs/gent_bev_v1.yaml
 # uv run treelidarnet train --config configs/gent_canopy_v2.yaml --resume
 # Full-grid train uses chips_index_full + sampler.tree_chip_weight (oversample register chips); infer still full grid.
 # per_tree_weight (0.01) adds a per-stake peak loss beside the grid loss. resume_weights_only refreshes Adam when that term is turned on.
+# BEV map checkpoint frozen at epoch3_hot; next model is a PointNet++ crop verifier (see docs/SPEC.md §6.5).
+# uv run treelidarnet data-build-crop-index [--positives-only] [--limit N]
+# uv run treelidarnet train-crop --config configs/gent_crop_verifier_v1.yaml
+# DHMV RGB for verifier only (BEV still 4 ch): data-patch-chips-rgb [--all-chips] [--only-missing-rgb] [--register-chips] [--offset N]
+# Before v3_rgb train: --register-chips --only-missing-rgb --refresh-missing-manifest --jobs 1
+# uv run treelidarnet train-crop --config configs/gent_crop_verifier_v3_rgb.yaml
+# uv run treelidarnet filter-export --input exports/...json.gz --output ... --verifier runs/gent_crop_verifier/best.pt
+# uv run treelidarnet infer-gent --verifier runs/gent_crop_verifier/best.pt --verifier-threshold 0.5
 
 # Checkpoints: `runs/<run_name>/latest.pt` (every 500 steps + each epoch + on Ctrl+C),
 # `best.pt` (lowest epoch-mean train loss). Resume:
@@ -83,3 +91,12 @@ uv run treelidarnet infer-gent --live --checkpoint runs/gent_real_v1/best.pt
 ```
 
 Chip QA: open `viewer/index.html` and load `exports/inference/*.json.gz`.
+
+Crop QA (register + model rings → WebGPU point cloud):
+
+```bash
+make viewer-crop-qa
+# http://127.0.0.1:8765/viewer/crops.html
+```
+
+Needs `data/manifests/gent_trees.parquet` and chip `.npz` files. Optional: city export path in the map toolbar (default `exports/inference/gent_city_gent_canopy_v2.json.gz`).

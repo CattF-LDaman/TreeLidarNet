@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import torch
@@ -19,7 +20,11 @@ from treelidarnet.datasets.chip_index import (
     tree_counts_by_chip_id,
 )
 from treelidarnet.models.gent_detector import GentTreeDetector
-from treelidarnet.models.losses import focal_loss_components, per_tree_peak_loss
+from treelidarnet.models.losses import (
+    focal_loss_components,
+    per_tree_peak_loss,
+    unknown_peak_loss,
+)
 from treelidarnet.paths import chips_dir, manifests_dir, repo_root, runs_dir
 
 
@@ -89,6 +94,39 @@ def _load_weights_only(
     return start_epoch, global_step, float("inf")
 
 
+def resume_checkpoint_path(resume_from: str, *, latest: Path, best: Path) -> Path:
+    """Pick the checkpoint a resume should load.
+
+    ``latest`` is the default. ``best`` ignores an interrupted latest.pt.
+    """
+    choice = (resume_from or "latest").lower()
+    if choice == "best":
+        if not best.is_file():
+            raise FileNotFoundError(f"resume_from is best, but {best} is missing")
+        return best
+    if latest.is_file():
+        return latest
+    if best.is_file():
+        return best
+    raise FileNotFoundError(f"No checkpoint at {latest} or {best}")
+
+
+def resume_epoch_stop(start_epoch: int, epochs: int, resume_epochs: int | None) -> int:
+    """Exclusive end index. ``resume_epochs`` counts forward from the checkpoint."""
+    if resume_epochs is None:
+        return epochs
+    return start_epoch + int(resume_epochs)
+
+
+def archive_checkpoint_once(src: Path, dest: Path) -> Path | None:
+    """Copy ``src`` to ``dest`` unless that archive file is already there."""
+    if not src.is_file() or dest.exists():
+        return None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    return dest
+
+
 def load_training_checkpoint(
     path: Path,
     *,
@@ -139,6 +177,15 @@ def train_from_config(
     per_tree_weight = float(loss_cfg.pop("per_tree_weight", 0.0))
     per_tree_radius_m = float(loss_cfg.pop("per_tree_radius_m", 2.0))
     per_tree_radius_px = max(1, int(round(per_tree_radius_m / CELL_SIZE_M)))
+    unknown_peak_weight = float(loss_cfg.pop("unknown_peak_weight", 0.0))
+    unknown_peak_keep = float(loss_cfg.pop("unknown_peak_keep", 0.90))
+    unknown_peak_floor = float(loss_cfg.pop("unknown_peak_floor", 0.20))
+    unknown_peak_radius_m = float(loss_cfg.pop("unknown_peak_radius_m", 2.0))
+    unknown_peak_radius_px = max(1, int(round(unknown_peak_radius_m / CELL_SIZE_M)))
+    unknown_peak_use_focal = bool(loss_cfg.pop("unknown_peak_focal", True))
+    unknown_peak_alpha = float(
+        loss_cfg.pop("unknown_peak_alpha", loss_cfg.get("alpha", 2.0))
+    )
     grad_clip = float(cfg.get("grad_clip_norm") or 0.0)
     if per_tree_weight > 0:
         print(
@@ -146,9 +193,19 @@ def train_from_config(
             f"({per_tree_radius_px} px)",
             flush=True,
         )
+    if unknown_peak_weight > 0:
+        print(
+            f"Unknown-peak loss weight={unknown_peak_weight} "
+            f"scores in [{unknown_peak_floor}, {unknown_peak_keep}) "
+            f"radius={unknown_peak_radius_m} m ({unknown_peak_radius_px} px)",
+            flush=True,
+        )
     if grad_clip > 0:
         print(f"Grad clip max_norm={grad_clip}", flush=True)
-    ds = ChipDataset(paths)
+    clear_stored_ignore = bool(cfg.get("clear_stored_ignore", False))
+    if clear_stored_ignore:
+        print("Train: stored ignore mask ignored (all cells active)", flush=True)
+    ds = ChipDataset(paths, clear_stored_ignore=clear_stored_ignore)
     in_ch = int(cfg.get("in_channels", 4))
     batch = int(cfg.get("batch_size", 2))
     epochs = int(cfg.get("epochs", 5))
@@ -218,34 +275,38 @@ def train_from_config(
             print(f"Loaded weights from {init_path}")
 
     weights_only = bool(cfg.get("resume_weights_only", False))
-    if resume and latest_path.is_file():
+    if resume:
+        archive_rel = cfg.get("archive_best_to")
+        if archive_rel and best_path.is_file():
+            archive_dest = Path(str(archive_rel))
+            if not archive_dest.is_absolute():
+                archive_dest = out_dir / archive_dest
+            archived = archive_checkpoint_once(best_path, archive_dest)
+            if archived is not None:
+                print(f"Archived {best_path.name} to {archived}")
+            else:
+                print(f"Kept existing archive {archive_dest}")
+        resume_path = resume_checkpoint_path(
+            str(cfg.get("resume_from") or "latest"),
+            latest=latest_path,
+            best=best_path,
+        )
         if weights_only:
             start_epoch, global_step, best_epoch_loss = _load_weights_only(
-                latest_path, model=model, device=device
+                resume_path, model=model, device=device
             )
             print(
-                f"Resumed weights only from {latest_path} "
+                f"Resumed weights only from {resume_path} "
                 f"(epoch index {start_epoch}, step {global_step}, fresh optimizer)"
             )
         else:
             start_epoch, global_step, best_epoch_loss = load_training_checkpoint(
-                latest_path, model=model, optimizer=opt, scaler=scaler, device=device
+                resume_path, model=model, optimizer=opt, scaler=scaler, device=device
             )
-            print(f"Resumed from {latest_path} (epoch index {start_epoch}, step {global_step})")
-    elif resume and best_path.is_file():
-        if weights_only:
-            start_epoch, global_step, best_epoch_loss = _load_weights_only(
-                best_path, model=model, device=device
-            )
-            print(
-                f"Resumed weights only from {best_path} "
-                f"(epoch index {start_epoch}, step {global_step}, fresh optimizer)"
-            )
-        else:
-            start_epoch, global_step, best_epoch_loss = load_training_checkpoint(
-                best_path, model=model, optimizer=opt, scaler=scaler, device=device
-            )
-            print(f"Resumed from {best_path} (epoch index {start_epoch}, step {global_step})")
+            print(f"Resumed from {resume_path} (epoch index {start_epoch}, step {global_step})")
+        if bool(cfg.get("reset_best_loss", False)):
+            best_epoch_loss = float("inf")
+            print("Best-loss baseline reset so this epoch can replace best.pt")
 
     writer: SummaryWriter | None = None
     if tensorboard:
@@ -284,9 +345,18 @@ def train_from_config(
             )
             print(f"  saved best.pt (epoch loss {epoch_loss:.4f})")
 
+    resume_epochs_cfg = cfg.get("resume_epochs")
+    resume_epochs = int(resume_epochs_cfg) if resume and resume_epochs_cfg is not None else None
+    epoch_stop = resume_epoch_stop(start_epoch, epochs, resume_epochs)
+    if resume_epochs is not None:
+        print(
+            f"This resume runs {resume_epochs} epoch(s): "
+            f"index {start_epoch} through {epoch_stop - 1}",
+            flush=True,
+        )
     resume_epoch = start_epoch
     try:
-        for epoch in range(start_epoch, epochs):
+        for epoch in range(start_epoch, epoch_stop):
             resume_epoch = epoch
             model.train()
             total = 0.0
@@ -322,6 +392,19 @@ def train_from_config(
                         radius_px=per_tree_radius_px,
                     )
                     loss = loss + per_tree_weight * tree_m
+                unk_m = pred.sum() * 0.0
+                if unknown_peak_weight > 0:
+                    unk_m = unknown_peak_loss(
+                        pred,
+                        unknown,
+                        ignore,
+                        keep=unknown_peak_keep,
+                        floor=unknown_peak_floor,
+                        radius_px=unknown_peak_radius_px,
+                        alpha=unknown_peak_alpha,
+                        use_focal=unknown_peak_use_focal,
+                    )
+                    loss = loss + unknown_peak_weight * unk_m
                 if not torch.isfinite(loss):
                     msg = (
                         f"Training stopped: bad loss {float(loss.detach())}"
@@ -345,6 +428,8 @@ def train_from_config(
                     writer.add_scalar("loss/neg", float(neg_m.item()), global_step)
                     if per_tree_weight > 0:
                         writer.add_scalar("loss/tree", float(tree_m.item()), global_step)
+                    if unknown_peak_weight > 0:
+                        writer.add_scalar("loss/unknown", float(unk_m.item()), global_step)
                 last_pred = pred.detach().cpu()
                 last_target = target.detach().cpu()
                 if checkpoint_every_steps > 0 and global_step % checkpoint_every_steps == 0:
@@ -369,7 +454,7 @@ def train_from_config(
                 if last_pred is not None:
                     writer.add_images("heatmap/pred", last_pred[:4], epoch + 1)
                     writer.add_images("heatmap/target", last_target[:4], epoch + 1)
-            print(f"epoch {epoch + 1}/{epochs} loss={avg:.4f}")
+            print(f"epoch {epoch + 1}/{epoch_stop} loss={avg:.4f}")
             persist(epoch + 1, avg)
     except KeyboardInterrupt:
         print("Interrupted — writing latest.pt")

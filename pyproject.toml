@@ -27,6 +27,11 @@ treelidarnet = "treelidarnet.cli:main"
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "starlette>=0.38",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "matplotlib>=3.8",
+    "pillow>=10.0",
 ]
 
 [build-system]

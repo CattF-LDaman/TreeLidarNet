@@ -1,6 +1,10 @@
 import torch
 
-from treelidarnet.models.losses import focal_loss_components, per_tree_peak_loss
+from treelidarnet.models.losses import (
+    focal_loss_components,
+    per_tree_peak_loss,
+    unknown_peak_loss,
+)
 
 
 def test_unknown_mask_reduces_negative_loss():
@@ -44,4 +48,28 @@ def test_per_tree_peak_loss_empty_target_is_zero():
     pred = torch.full((1, 1, 16, 16), 0.4)
     target = torch.zeros(1, 1, 16, 16)
     loss = per_tree_peak_loss(pred, target, radius_px=4)
+    assert float(loss.item()) == 0.0
+
+
+def test_unknown_peak_loss_lowers_mid_scores_and_spares_high_ones():
+    pred = torch.full((1, 1, 32, 32), 0.05)
+    pred[0, 0, 8, 8] = 0.72
+    pred[0, 0, 24, 24] = 0.95
+    pred.requires_grad_(True)
+    unknown = torch.ones(1, 1, 32, 32)
+    loss = unknown_peak_loss(
+        pred, unknown, radius_px=4, keep=0.90, floor=0.20, use_focal=False
+    )
+    loss.backward()
+    assert abs(float(loss.item()) - 0.72) < 1e-5
+    assert float(pred.grad[0, 0, 8, 8].item()) > 0
+    assert float(pred.grad[0, 0, 24, 24].item()) == 0.0
+    assert float(pred.grad[0, 0, 0, 0].item()) == 0.0
+
+
+def test_unknown_peak_loss_ignores_labeled_cells():
+    pred = torch.full((1, 1, 16, 16), 0.05)
+    pred[0, 0, 8, 8] = 0.70
+    unknown = torch.zeros(1, 1, 16, 16)
+    loss = unknown_peak_loss(pred, unknown, radius_px=2, keep=0.90, floor=0.20)
     assert float(loss.item()) == 0.0

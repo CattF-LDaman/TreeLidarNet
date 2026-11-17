@@ -175,3 +175,40 @@ def per_tree_peak_loss(
         if peak_pred.numel() == 0:
             return pred.sum() * 0.0
         return (-torch.log(peak_pred) * torch.pow(1 - peak_pred, alpha)).mean()
+
+
+def unknown_peak_loss(
+    pred: torch.Tensor,
+    unknown: torch.Tensor,
+    ignore: torch.Tensor | None = None,
+    *,
+    keep: float = 0.90,
+    floor: float = 0.20,
+    radius_px: int = 8,
+    alpha: float = 2.0,
+    use_focal: bool = True,
+) -> torch.Tensor:
+    """Push down unlabeled local maxima in ``[floor, keep)``.
+
+    With ``use_focal``, uses ``-log(1-p) * p^alpha`` on punished peaks instead
+    of the raw mean score, so mid-height bumps get stronger gradients without
+    flattening the whole map toward ``floor``. A local maximum at or above
+    ``keep`` is not in the set. The peak mask is detached.
+    """
+    with _fp32_loss(pred):
+        pred = pred.float()
+        unknown = unknown.float()
+        radius_px = max(1, int(radius_px))
+        window = radius_px * 2 + 1
+        pooled = F.max_pool2d(pred, window, stride=1, padding=radius_px)
+        is_peak = pred >= pooled - 1e-6
+        punish = is_peak & (unknown > 0.5) & (pred >= floor) & (pred < keep)
+        if ignore is not None:
+            punish = punish & (ignore.float() < 1)
+        punish = punish.detach()
+        if int(punish.sum().item()) == 0:
+            return pred.sum() * 0.0
+        peak_pred = pred[punish].clamp(_PROB_EPS, 1.0 - _PROB_EPS)
+        if use_focal:
+            return (-torch.log(1 - peak_pred) * torch.pow(peak_pred, alpha)).mean()
+        return peak_pred.mean()

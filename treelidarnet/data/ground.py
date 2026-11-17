@@ -16,18 +16,33 @@ def sample_dtm_at_points(
 ) -> np.ndarray:
     """Sample DTM elevations at Lambert xy; nodata → nan."""
     ground = np.full(len(x), np.nan, dtype=np.float64)
-    if not dtm_path.is_file():
+    if not dtm_path.is_file() or len(x) == 0:
         return ground
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
     with rasterio.open(dtm_path) as src:
-        for i in range(len(x)):
-            try:
-                r, c = rowcol(src.transform, x[i], y[i])
-            except Exception:
-                continue
-            if 0 <= r < src.height and 0 <= c < src.width:
-                val = src.read(1)[r, c]
-                if val != src.nodata:
-                    ground[i] = float(val)
+        band = src.read(1)
+        rows, cols = rowcol(src.transform, x, y)
+        rows = np.asarray(rows, dtype=np.int64)
+        cols = np.asarray(cols, dtype=np.int64)
+        valid = (
+            (rows >= 0)
+            & (rows < src.height)
+            & (cols >= 0)
+            & (cols < src.width)
+        )
+        if not np.any(valid):
+            return ground
+        rr = rows[valid]
+        cc = cols[valid]
+        vals = band[rr, cc]
+        idx = np.flatnonzero(valid)
+        if src.nodata is not None:
+            nodata = src.nodata
+            good = vals != nodata
+            ground[idx[good]] = vals[good].astype(np.float64, copy=False)
+        else:
+            ground[idx] = vals.astype(np.float64, copy=False)
     return ground
 
 

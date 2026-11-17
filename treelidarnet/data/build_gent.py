@@ -13,23 +13,43 @@ from treelidarnet.data.chips import CHIP_SIZE_M
 from treelidarnet.data.grb import GrbIndex
 from treelidarnet.paths import data_dir, manifests_dir
 
+_LAZ_CORNER_RE = re.compile(r"_(\d+)_(\d+)(?:\.copc)?\.laz$", re.I)
 
-def index_laz_files(laz_dir: Path) -> dict[tuple[int, int], Path]:
-    index: dict[tuple[int, int], Path] = {}
+
+def index_laz_files(laz_dir: Path) -> dict[tuple[int, int], list[Path]]:
+    """Every LAZ that shares a 500 m corner. Flight lines do not overwrite each other."""
+    index: dict[tuple[int, int], list[Path]] = {}
     for p in laz_dir.glob("*.laz"):
-        m = re.search(r"_(\d+)_(\d+)\.laz$", p.name, re.I)
-        if m:
-            index[(int(m.group(1)), int(m.group(2)))] = p
+        if p.name.lower().endswith(".copc.laz"):
+            continue
+        m = _LAZ_CORNER_RE.search(p.name)
+        if not m:
+            continue
+        key = (int(m.group(1)), int(m.group(2)))
+        index.setdefault(key, []).append(p)
+    for paths in index.values():
+        paths.sort(key=lambda path: path.name)
     return index
 
 
-def laz_paths_for_chip(x0: float, y0: float, index: dict[tuple[int, int], Path]) -> list[Path]:
+def laz_paths_for_chip(
+    x0: float,
+    y0: float,
+    index: dict[tuple[int, int], list[Path]],
+) -> list[Path]:
     x1, y1 = x0 + CHIP_SIZE_M, y0 + CHIP_SIZE_M
     keys = set()
     for tx in {int(np.floor(x0 / 500) * 500), int(np.floor((x1 - 1e-6) / 500) * 500)}:
         for ty in {int(np.floor(y0 / 500) * 500), int(np.floor((y1 - 1e-6) / 500) * 500)}:
             keys.add((tx, ty))
-    return [index[k] for k in keys if k in index]
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for key in keys:
+        for path in index.get(key, []):
+            if path not in seen:
+                seen.add(path)
+                out.append(path)
+    return out
 
 
 def unique_chip_origins(trees_parquet: Path) -> list[tuple[float, float]]:

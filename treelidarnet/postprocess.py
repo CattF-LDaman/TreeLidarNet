@@ -18,6 +18,7 @@ class Detection:
     y: float
     score: float
     source_chip_ids: tuple[str, ...] = ()
+    verifier_score: float | None = None
 
 
 def extract_peaks_from_heatmap(
@@ -68,23 +69,11 @@ def nms_detections(dets: list[Detection], *, radius_m: float) -> list[Detection]
     return kept
 
 
-def merge_chip_detections(
-    chip_detections: list[tuple[str, list[Detection]]],
+def _nms_merge_detections_sorted(
+    sorted_d: list[Detection],
     *,
     radius_m: float = 2.5,
 ) -> list[Detection]:
-    all_d: list[Detection] = []
-    for chip_id, dets in chip_detections:
-        for d in dets:
-            all_d.append(
-                Detection(
-                    x=d.x,
-                    y=d.y,
-                    score=d.score,
-                    source_chip_ids=(chip_id,) + d.source_chip_ids,
-                )
-            )
-    sorted_d = sorted(all_d, key=lambda d: d.score, reverse=True)
     # Same rule as a score-ordered scan: the first kept point within radius wins.
     # Buckets only limit which points are tested.
     cell = radius_m if radius_m > 0 else 1.0
@@ -127,7 +116,53 @@ def merge_chip_detections(
         if cand.score > hit.score:
             chips = tuple(dict.fromkeys(hit.source_chip_ids + cand.source_chip_ids))
             _drop(hit)
-            _add(Detection(x=cand.x, y=cand.y, score=cand.score, source_chip_ids=chips))
+            vs = cand.verifier_score if cand.verifier_score is not None else hit.verifier_score
+            _add(
+                Detection(
+                    x=cand.x,
+                    y=cand.y,
+                    score=cand.score,
+                    source_chip_ids=chips,
+                    verifier_score=vs,
+                )
+            )
     flat = [det for group in buckets.values() for det in group]
     flat.sort(key=lambda det: order[id(det)])
     return flat
+
+
+def merge_detection_lists(
+    *groups: list[Detection],
+    radius_m: float = 2.5,
+) -> list[Detection]:
+    """Cross-chip NMS on one or more flat detection lists (score-ordered merge)."""
+    all_d: list[Detection] = []
+    for group in groups:
+        all_d.extend(group)
+    if not all_d:
+        return []
+    sorted_d = sorted(all_d, key=lambda d: d.score, reverse=True)
+    return _nms_merge_detections_sorted(sorted_d, radius_m=radius_m)
+
+
+def merge_chip_detections(
+    chip_detections: list[tuple[str, list[Detection]]],
+    *,
+    radius_m: float = 2.5,
+) -> list[Detection]:
+    all_d: list[Detection] = []
+    for chip_id, dets in chip_detections:
+        for d in dets:
+            all_d.append(
+                Detection(
+                    x=d.x,
+                    y=d.y,
+                    score=d.score,
+                    source_chip_ids=(chip_id,) + d.source_chip_ids,
+                    verifier_score=d.verifier_score,
+                )
+            )
+    if not all_d:
+        return []
+    sorted_d = sorted(all_d, key=lambda d: d.score, reverse=True)
+    return _nms_merge_detections_sorted(sorted_d, radius_m=radius_m)

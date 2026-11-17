@@ -210,7 +210,7 @@ Every eligible stake inside a tile is a positive. There is no edge band that dro
 
 - **Start small** — a model that trains on a single GPU in <2 h on a Gent subset beats a fragile Point Transformer.
 - **Prefer 2.5D** for v1 — BEV grid from points is fast and pairs well with heatmap heads (similar to CenterNet / FCOS3D-lite in bird’s-eye view).
-- **Keep a point-cloud path** — optional parallel branch for ablation (PointNet++ encoder → max pool → concat to BEV).
+- **Keep a point-cloud path** — optional parallel branch for ablation (PointNet++ encoder → max pool → concat to BEV); the **crop verifier** (§6.5) is the primary point-network deliverable.
 
 ### 6.2 Recommended v1 architecture: `GentTreeDetector`
 
@@ -232,9 +232,28 @@ Points (N×F)
 
 ### 6.3 Baseline B (optional)
 
-Point-wise **RandLA-Net** or **PointNet++** with 3 classes — useful for ablation; not the primary metric unless detection head underperforms CHM baseline.
+Point-wise **RandLA-Net** or per-point semantic **PointNet++** with 3 classes — useful for ablation on the **city BEV** path; not the primary metric unless detection head underperforms CHM baseline.
 
-### 6.4 Reproducibility
+### 6.5 Crop verifier: `GentCropVerifier` (canopy v2, second stage)
+
+The BEV detector (`epoch3_hot`) proposes xy + score. A second model scores **local LiDAR geometry** on each proposal (and is trained on register stakes independently of detector hits).
+
+| Item | Default |
+|------|---------|
+| Architecture | **PointNet++** — two set-abstraction levels (tight radius for trunk/column, wider for crown), then binary **tree / not-tree** head |
+| Input | Crop centered on stake (train) or detection (infer); **~512** points subsampled |
+| Features | xyz (Lambert), **height above ground**, intensity, return number, LAS class |
+| Ball radii | Meters (e.g. ~0.5 m inner, ~2 m outer — tune on val) |
+| Positives | Every **eligible** register tree crop (including detector misses) |
+| Negatives v1 | GRB **building/road** crops; detector peaks where **`hard_negative`** is hot at the peak — **not** generic carpet or off-register mid scores (discoveries) |
+| Infer | Run only on detector proposals; track **discovery retention**, not just road/building FP drop |
+| Later | Same backbone + coarse structure head (e.g. conifer vs broadleaf); full `sortiment` is out of scope for leaf-off DHMV II |
+
+**Implementation order:** crop extract → crop index manifest → train PointNet++ verifier → offline filter on center export → optional `infer-gent --verifier`.
+
+Plain **PointNet** is optional as a **height-stats MLP / ablation baseline** on the same crop index; it is not the planned production verifier.
+
+### 6.6 Reproducibility
 
 - Fixed seeds per split in `split_meta.json`.
 - Save `config.yaml` + git SHA + manifest hashes in each checkpoint (`checkpoint["meta"]`).

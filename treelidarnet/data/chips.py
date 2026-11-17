@@ -64,7 +64,8 @@ def make_unknown_mask(
     cell_y = origin_y + (yy + 0.5) * cell_size_m
     band2 = unknown_band_m * unknown_band_m
     min_d2 = np.full((n, n), np.inf, dtype=np.float64)
-    for tx, ty in tree_xy:
+    for item in tree_xy:
+        tx, ty = float(item[0]), float(item[1])
         d2 = (cell_x - tx) ** 2 + (cell_y - ty) ** 2
         min_d2 = np.minimum(min_d2, d2)
     return (min_d2 > band2).astype(np.float32)

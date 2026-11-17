@@ -47,13 +47,14 @@ def export_inference_gz(
     preds = []
     for p in predictions:
         lon, lat = lambert_to_wgs84(p.x, p.y)
-        preds.append(
-            {
-                "position": [lon, lat],
-                "score": p.score,
-                "radiusMeters": 3.0,
-            }
-        )
+        row = {
+            "position": [lon, lat],
+            "score": p.score,
+            "radiusMeters": 3.0,
+        }
+        if p.verifier_score is not None:
+            row["verifier_score"] = p.verifier_score
+        preds.append(row)
     payload: dict[str, Any] = {
         "version": 1,
         "model_id": model_id,
@@ -101,13 +102,14 @@ def export_city_gz(
     preds = []
     for p in predictions:
         lon, lat = lambert_to_wgs84(p.x, p.y)
-        preds.append(
-            {
-                "position": [lon, lat],
-                "score": p.score,
-                "radiusMeters": 3.0,
-            }
-        )
+        row = {
+            "position": [lon, lat],
+            "score": p.score,
+            "radiusMeters": 3.0,
+        }
+        if p.verifier_score is not None:
+            row["verifier_score"] = p.verifier_score
+        preds.append(row)
     payload: dict[str, Any] = {
         "version": 2,
         "scope": "ghent_city",

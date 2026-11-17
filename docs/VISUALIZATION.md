@@ -64,7 +64,7 @@ Compatible with HugATree scatter records plus model fields:
 ```json
 {
   "version": 1,
-  "model_id": "gent-v1-pointnet",
+  "model_id": "gent-crop-verifier-v1",
   "inference_at": "2026-11-10T00:00:00Z",
   "chip_id": "gent_50m_3k12_8j44",
   "gt_trees": [
@@ -139,6 +139,54 @@ Optional integration paths:
 - **Standalone** static viewer in `TreeLidarNet/viewer/` (fast iteration on models).
 - **Luwe Daman playground page** “LiDAR trees (Gent)” once API is stable.
 - **HugATree** admin-only overlay comparing municipal DB to model gaps (future).
+
+---
+
+## Crop QA viewer (register + BEV + verifier → 3D)
+
+**Page:** [`viewer/crops.html`](../viewer/crops.html)  
+**Server:** `make viewer-crop-qa` (loads `runs/gent_crop_verifier_v2/best.pt` for click scoring) — **http://127.0.0.1:8765**
+
+| Piece | Stack |
+|-------|--------|
+| Map | MapLibre + deck.gl — ring **width/color** = BEV score; **green/red fill halo** = verifier when present |
+| Register | `GET /api/register/all` (full city, HugATree-style) |
+| Predictions | `GET /api/predictions?path=` or **live** poll `GET /api/live/verified/predictions` |
+| Live verify | `filter-export --live --bev-min 0.9` writes `exports/inference/live/verified_*.json`; enable **Live verifier scoring** on the map |
+| Crop on click | `GET /api/crop/wgs84?lon&lat` — extract + optional **verifier_score** in API response |
+| 3D panel | Three.js point cloud + crop **radius ring**; score bars for BEV / verifier |
+
+**Live workflow**
+
+```bash
+# Terminal 1
+make viewer-crop-qa
+
+# Terminal 2 (subset — use --limit while experimenting)
+make filter-export-live-center
+# or full high-conf slice:
+# uv run treelidarnet filter-export --live --bev-min 0.9 \
+#   --input exports/inference/gent_city_gent_canopy_v2.json.gz \
+#   --output exports/inference/gent_city_gent_canopy_v2_verified.json.gz \
+#   --verifier runs/gent_crop_verifier_v2/best.pt
+```
+
+On the map: enable **Live verifier scoring**, set **Min BEV** (e.g. 0.90), tune **Min verifier** to hide low scores without re-running export.
+
+---
+
+## LinkedIn verifier showcase reel (MP4)
+
+Offline reel: map zoom on a detection, then a long **downward isometric orbit** — alternating soft **RGB splats** and **height-colored points** (same palette as the crop 3D viewer). Requires **ffmpeg** and scored rows in `verified_predictions.json`. Defaults: `--cloud-frames 120`, `--cloud-rotations 1.4`.
+
+```bash
+uv run python scripts/render_verifier_linkedin_reel.py \
+  --verified exports/inference/live/verified_predictions.json \
+  --n 20 --bev-min 0.85 --verifier-min 0.85 --min-spacing-m 400 \
+  --output exports/inference/linkedin_verifier_reel.mp4
+```
+
+Writes `linkedin_verifier_reel_manifest.json` with the 20 picks (scores, chip_id, frame ranges). Only detections on chips that already have `rgb` in the npz are eligible.
 
 ---
 

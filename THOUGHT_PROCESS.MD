@@ -1,6 +1,6 @@
 # TreeLidarNet — thought process (design diary)
 
-**Session:** 10–12 November 2026 (build day, full-grid train, anti-carpet pivot)  
+**Session:** 10–17 November 2026 (build day, full-grid train, anti-carpet pivot, PointNet++ verifier + crop QA + **full city @ 0.80** + **v3 RGB** + **dual verifier QA**)  
 **Repo:** [TreeLidarNet](https://github.com/CattF-LDaman/TreeLidarNet) · references: HugATree, LuweDaman (Deck.GL map UX)  
 **Purpose of this file:** A readable narrative for a **project write-up** — what we wanted, how the goal changed, what we built and observed. Technical truth lives in `docs/SPEC.md`, `docs/TASK_GHENT_BROAD.md`, `docs/LABELS.md`, `docs/EVAL.md`.
 
@@ -13,6 +13,8 @@ We set out to detect trees in Ghent from **Flanders DHMV II aerial LiDAR** (2013
 Mid-session we **pivoted** to *“find trees in Ghent broadly”* (canopy v2): keep register locations as **soft positives**, add an **unknown mask** so unlabeled canopy is not penalized, and add **GRB** building/road masks as **hard negatives**. We trained with PyTorch on **50 m LAZ chips**, fine-tuned from v1, ran smoke and **full live city inference** on a Deck.GL map, and pushed code commit `5d48c47`.
 
 After map review, you asked for **more detections without retraining**: lower the **export confidence floor** from 0.35 to **0.20**, add a **confidence slider** on the full city map, and **re-infer** with live polling so rings fill in during the run.
+
+On **16 Nov** the BEV map stays frozen at **`epoch3_hot`**. Work moved to a **PointNet++ crop verifier** (train + QA viewer): rebuild the crop manifest with negatives in val/test, fix how we pick checkpoints, and a local **Crop QA** map (register + amber rings + 3D crop preview) like HugATree’s one-shot tree load. You can see **leafy RGB** in external LAZ viewers; we add **RGB only on the verifier path** (not a 133k BEV retrain) via `data-patch-chips-rgb` on crop-manifest chips.
 
 Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **variable-σ** heatmap patch. On 11 Nov we archived the pre-grid weights and started a long fine-tune. Most grid chips have **no register trees**; we **oversampled** the ~10.7k that do. Epoch 1 of that pass landed at loss **0.000394** with only a slight drop in smoothed `loss/pos`. **Per-tree peak loss** (weight **0.01**) is already in the config; a watcher starts it when epoch 2 finishes, so each missed stake can move the weights without a hard “every tree must be detected” rule. That term does **not** forbid discoveries. **Audit F1** is the score we read after infer; training still picks `best.pt` by train loss. Later, once detections are trustworthy, a **second network** scores each candidate on a small LiDAR crop: tree or not, and only a coarse structure class. It **trains on every eligible register tree**, including stakes the detector missed. The detector only chooses where to run it. The register itself stays the rich species table.
 
@@ -39,7 +41,9 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **CHM** | Canopy height model: DSM − DTM. **CHM peaks** are hilltops on that height map (non-learned baseline). |
 | **Validation F1** | The same audit (and strict) scores on a **held-out** area. Not inside this train loop. Meant as a checkpoint check before the next full-city infer. |
 | **Per-tree peak loss** | Implemented, weight **0.01**. Starts when epoch 2 ends: focal penalty on the strongest prediction within **2 m** of each register peak. |
-| **Candidate network** | Later second model. **Train** on a LiDAR crop of **every** eligible register tree, including stakes the detector missed. **Run** only on detections. PointNet verifier first; a small two-scale PointNet++ if poles and shrubs still pass (§37). |
+| **Candidate network** | Second-stage **PointNet++** crop verifier. **Train** on a LiDAR crop of **every** eligible register tree, including stakes the detector missed. **Run** only on detections (§37). |
+| **Crop QA** | Local `serve-crop-qa` + Deck map + 512-pt 3D preview. Register loaded once (HugATree-style), not per-viewport. |
+| **Verifier checkpoint** | `best.pt` chosen by **val F1** (both classes in val), not raw val BCE alone (§40). |
 
 ---
 
@@ -98,6 +102,15 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **12 Nov 00:36** | East–west streaks have no LiDAR. Fetch the other flight line tomorrow | **25,979** chips have zero points, **1,841** of them with register trees. The downloader saved the strip under the tile center. The strip that fills the northern edge was never requested |
 | **12 Nov 01:06** | Second model trains on every register tree | Crops come from **all** eligible stakes, including trees this detector never rang. Detections are where it **runs**, not where it **learns** |
 | **12 Nov 01:24** | Crop classifier is PointNet, then a small PointNet++ | The city detector stays the BEV U-Net. The crop is a vertical stack: column, then crown. PointNet first. Two-scale PointNet++ if poles and shrubs still pass |
+| **16 Nov** | **PointNet++ verifier immediately** | Skip staging plain PointNet; two-scale PointNet++ is the first implementation (§37, [docs/SPEC.md](docs/SPEC.md) §6.5) |
+| **16 Nov** | **Crop QA map** pop-in; 3D panel broken | Full register load (`/api/register/all`); Three.js **import map** + WebGPU `renderAsync` fallback |
+| **16 Nov** | **Are crop losses right?** | Plain BCE is fine math; **val had no negatives**, unweighted BCE, **zero placeholders** — fixed before trusting `best.pt` (§40) |
+| **16 Nov** | **`gent_crop_verifier_v2` train** | Rebuilt `crops_index`; balanced loss; **`best.pt` by val F1**; TensorBoard on **6006** (start `make tensorboard` yourself) |
+| **16 Nov PM** | **Verifier-only RGB (§41–§43)** | Manifest walked; **register-first** re-patch (**2,166** tiles); full grid RGB **paused**; then **`v3_rgb`** train — BEV unchanged |
+| **16–17 Nov** | **v2 vs v3 compare on crop QA** | Dual checkpoints on `serve-crop-qa`; click + map halos via `filter-export --live` with **`--verifier-v2`** + **`--verifier-v3`** (§44) |
+| **17 Nov AM** | **Full-grid RGB finished** | **`--all-chips --only-missing-rgb`**: **79,460** writes / **83,290** queued (`patch_chip_rgb_full_city.log`) |
+| **17 Nov AM** | **Full dual verifier score** | **`filter-export-verifier-full`**: **530,258** preds @ **BEV ≥ 0.85**, v2+v3 compare + live poll — not BEV `infer-gent` |
+| **17 Nov AM** | **Almost started BEV re-infer by mistake** | `make infer-gent-full` killed **~16k/133k**; **`gent_city_gent_canopy_v2.json.gz` unchanged** (export only at end of infer) |
 
 ---
 
@@ -722,17 +735,19 @@ Non-trees are added on purpose: GRB roofs and roads, and detector peaks that are
 
 ---
 
-### 37. PointNet first, then a small PointNet++ (12 Nov, ~01:24)
+### 37. PointNet++ crop verifier (12 Nov plan; 16 Nov — skip plain PointNet)
 
 The city detector stays the BEV U-Net (§24). The second model is the one that sees the points.
 
-A crop is a vertical stack. Near the ground the returns are a narrow column or a gap. Higher up they spread into a crown. A plain PointNet pools every point into one vector, which is enough to tell a tall cloud from a flat roof. It does not look at that change of shape with height. PointNet++ does, with two set-abstraction levels: a tight neighborhood for the column and a wider one for the crown, then one tree-or-not score. Coarse type, later, is the same head. Conifer versus broadleaf in this leaf-off scan is mostly that profile.
+A crop is a vertical stack. Near the ground the returns are a narrow column or a gap. Higher up they spread into a crown. **PointNet++** with two set-abstraction levels—a tight neighborhood for the column and a wider one for the crown—then one **tree-or-not** score. Coarse type, later, is the same backbone. Conifer versus broadleaf in this leaf-off scan is mostly that profile.
 
-**Order.** Train the verifier as a plain PointNet on every eligible register crop plus roofs, roads, and the detector’s empty peaks (§36). If that already rejects the carpet, stay there. Move to the two-scale PointNet++ when poles and shrubs still pass.
+**Order (16 Nov).** Implement **PointNet++ first**, not a staged plain PointNet. The column/crown signal is the whole point of the verifier; anti-carpet on the BEV already showed that score-only fixes do not separate lattice junk from real canopy. Optional: a height-stats MLP on the same crop index as a cheap ablation baseline—not the shipped verifier.
 
-**Crop.** Center x and y on the stake or the detection. Use height above ground, plus intensity, return number, and class. Subsample to a fixed count, on the order of **512** points. Ball radii are in meters. A Point Transformer is the wrong size for about **59,000** sparse crowns and a yes-or-no label. The SPEC mention of PointNet++ is an optional branch on the BEV detector. This model replaces that job with a crop, and it runs only on proposed points.
+**Training data (§36).** Every eligible register crop plus GRB roofs/roads and detector peaks where **`hard_negative`** is hot at the peak—not carpet or off-register mid scores.
 
-**For write-up:** The map model is a photograph of the points. The classifier is a small point network on one tree’s cloud, PointNet first.
+**Crop.** Center x and y on the stake or the detection. Use height above ground, plus intensity, return number, and class. Subsample to a fixed count, on the order of **512** points. Ball radii are in meters. A Point Transformer is the wrong size for about **59,000** sparse crowns and a yes-or-no label. Runs only on proposed points at infer. Full spec: [docs/SPEC.md](docs/SPEC.md) §6.5.
+
+**For write-up:** The map model is a photograph of the points. The classifier is a small **two-scale PointNet++** on one tree’s cloud.
 
 ---
 
@@ -748,7 +763,7 @@ One epoch, from `best.pt` (step **110,242**), after `data-patch-chips-ignore`. N
 
 ---
 
-### 39. Anti-carpet BEV failed on the map; freeze epoch3_hot; PointNet verifier next (12 Nov, late morning)
+### 39. Anti-carpet BEV failed on the map; freeze epoch3_hot; PointNet++ verifier next (12 Nov, late morning)
 
 **What we tried.** After the second strip rebuild and `clear_stored_ignore` in training, we added `unknown_peak_loss` on unlabeled local maxima and ran resume epochs from epoch-3 weights:
 
@@ -762,7 +777,7 @@ One epoch, from `best.pt` (step **110,242**), after `data-patch-chips-ignore`. N
 
 **Training wall clock vs steps.** A full index epoch is still **~33k** optimizer steps. Late epoch-3 **hours** were mostly **DataLoader / disk stalls and pauses** (patch, NaN restart), not slower GPU steps (~**17–21 ms** when the loop moves). Fast passes today are **uninterrupted stepping** with warm page cache — not shortened epochs.
 
-**Pivot: PointNet verifier (§36–37).** Train a small **tree / not-tree** classifier on **LiDAR crops** (~**512** points). **Positives:** every **eligible** register stake (including detector misses). **Negatives (v1):** GRB **building/road** crops and detector peaks only where the chip **`hard_negative`** mask is hot at the peak — **not** generic carpet or off-register mid scores labeled “not tree,” because many of those are **real unlisted canopy** (discoveries). At infer, run the verifier **only on detector proposals**; track **discovery retention**, not just FP drop on roads.
+**Pivot: PointNet++ crop verifier (§36–37).** Train a small **tree / not-tree** classifier on **LiDAR crops** (~**512** points). **Positives:** every **eligible** register stake (including detector misses). **Negatives (v1):** GRB **building/road** crops and detector peaks only where the chip **`hard_negative`** mask is hot at the peak — **not** generic carpet or off-register mid scores labeled “not tree,” because many of those are **real unlisted canopy** (discoveries). At infer, run the verifier **only on detector proposals**; track **discovery retention**, not just FP drop on roads.
 
 **Ops added:** [`treelidarnet/qa_center.py`](treelidarnet/qa_center.py) + CLI `qa-checkpoint-center`; [`configs/gent_canopy_v2_anticarpet.yaml`](configs/gent_canopy_v2_anticarpet.yaml) for experiments; resume/archive helpers in [`treelidarnet/train.py`](treelidarnet/train.py).
 
@@ -770,15 +785,227 @@ One epoch, from `best.pt` (step **110,242**), after `data-patch-chips-ignore`. N
 
 ---
 
-## Where we left off (12 Nov, late morning)
+### 40. Crop QA viewer, training hygiene, and verifier v2 (16 Nov, midday)
 
-**Detector:** `best.pt` === **`archive/epoch3_hot/best.pt`** (step **110242**, loss **0.0021**). Anti-carpet archived (`epoch4_flat`, `epoch4b_qa_fail`). **No BEV anti-carpet** until center QA passes. **Map:** export **0.20**, slider **~0.85**; carpet mostly **sub-0.90** at the hot checkpoint (§32).
+**Your questions.** Register trees **pop in and out** when zooming. The **3D crop panel** failed to load. After starting train: **is the loss function correct for our use case?** **TensorBoard** did not show anything.
 
-**Next:** PointNet verifier (§39) — register positives, GRB / `hard_negative` negatives only; track discovery retention.
+**Crop map (HugATree pattern).** The bug was refetching the register on every `moveend` with a bbox and **`limit=8000`**, so the visible set changed with zoom. Fix: one **`GET /api/register/all`** (~59k eligible stakes), cached on the server — same idea as HugATree’s single `data.json` load. Predictions still come from one gzipped export; clicks fetch `/api/crop` for the 512-point tensor.
 
-1. Implement crop extract + `data-build-crop-index` + train PointNet v1.
-2. Offline filter on center export; then optional `infer-gent --verifier`.
-3. Any future BEV change must pass **`qa-checkpoint-center`** before replacing `best.pt`.
+**3D panel.** OrbitControls import bare `three`; the browser needs an **import map** in `crops.html`. WebGPU needs **`renderAsync`**, not `render()`, with WebGL2 fallback. TensorBoard is **not** started by `train-crop`; run **`make tensorboard`** (or port **6006**) separately.
+
+**Loss review — what was wrong vs what was fine.**
+
+| Piece | Verdict |
+|-------|---------|
+| **BCE on logits** + sigmoid at infer | Correct for binary tree / not-tree |
+| **Validation** | **Broken proxy:** all GRB negatives were `split=train` → val was almost only positives; low val loss could mean “always say tree” |
+| **Class balance** | ~**4:1** pos:neg with unweighted BCE → gradients favor positives (bad for an FP filter) |
+| **Failed crop extract** | Dataset filled **zeros** but kept the label; infer returns score **0** — inconsistent |
+| **`best.pt` rule** | Lowest val BCE tracked the wrong goal |
+
+**Decisions (implemented).**
+
+1. **Manifest:** GRB negatives use the same **85/10/5** hash split on `crop_id` as register trees (`_split_bucket`). Rebuilt index: **73,697** rows — val **7,498** (**1,522** neg), test **3,686** (**708** neg).
+2. **Loader:** `None` on failed extract; collate drops bad rows (no phantom trees).
+3. **Train:** `balance_class_loss: true` → BCE `pos_weight = n_neg / n_pos` (~**0.25**). Log **precision / recall / F1 / AUROC** and mean prob on pos vs neg; promote **`best.pt` by val F1**.
+4. **Run name:** **`gent_crop_verifier_v2`** so logs do not overwrite the naive v1 attempt; config still `configs/gent_crop_verifier_v1.yaml`.
+
+**Project outline (where this sits).**
+
+```
+LAZ → chips (BEV) → U-Net proposals (frozen epoch3_hot)
+                         ↓
+              detections @ score ≥ 0.20 (export); map slider ~0.85 for QA
+                         ↓
+        PointNet++ on 8 m / 512-pt crop → verifier_score → filter FPs
+                         ↑
+   trains on ALL eligible register crops + GRB hard_negative crops (NOT carpet/discovery as label-0)
+```
+
+**Still open after v2 trains.**
+
+- Offline **`filter-export`** on a center city bundle; measure **discovery retention** (SPEC §6.5).
+- Threshold sweep on val, not fixed **0.5** at infer.
+- Detector-peak negatives where **`hard_negative` is hot** (v1 manifest is GRB cells only).
+
+**For write-up:** We caught a classic trap — **imbalanced val and checkpoint metric** — before treating TensorBoard loss as “the model works.” The crop QA viewer is the human loop for “does this cloud look like a tree?” beside the amber ring.
+
+---
+
+### 41. Verifier-only RGB from DHMV II (16 Nov, afternoon)
+
+**Your question.** DHMV II LAZ already has **red/green/blue** (leaf-off or not, crowns look “real” in CloudCompare). Must we rebuild every BEV chip and retrain the U-Net?
+
+**Decision.** **No.** Keep the BEV at **`in_channels: 4`** and frozen **`epoch3_hot`**. Put RGB on the **crop verifier** only:
+
+| Layer | Channels | RGB source |
+|-------|----------|------------|
+| BEV detector | 4 (agg feat + density) | unchanged — chips still store 3 LiDAR attrs in `feat` |
+| Crop verifier | **9** = centered xy + h_agl + intensity/return/class + **RGB** | `rgb` array patched into npz from LAZ |
+
+**Why patch, not rebuild.** Training touches **~16.8k** unique chips in `crops_index.parquet` (73.7k crop rows), not all **133k** grid tiles. `data-patch-chips-rgb` re-reads LAZ per chip bbox, matches points to existing `xyz` (same h_agl keys as build), writes `rgb` (N,3) beside `feat`. No heatmap/GRB rewrite. Full-grid infer later needs **`--all-chips`** if we score detections outside the manifest chip set.
+
+**Probe.** OpenLiDAR DHMV II format **3** includes `red/green/blue` (uint16, typically 10k–60k on vegetation).
+
+**Code.** `treelidarnet/data/laz_io.py` (optional RGB in bbox read), `patch_chip_rgb.py`, `crops.py` `IN_CHANNELS_RGB=9`, `configs/gent_crop_verifier_v3_rgb.yaml`, 3D viewer uses API `red/green/blue` when present.
+
+**Train path.** After the manifest patch **walk** (not necessarily 100% on-disk success): `train-crop --config configs/gent_crop_verifier_v3_rgb.yaml` → `runs/gent_crop_verifier_v3_rgb/`. Crops on chips without `rgb` are skipped at load time. v2 **6-channel** checkpoint does not load into 9-channel weights without a fresh run.
+
+**For write-up:** Color is a **second-stage** cue (crown vs roof tint, column vs spread) that the BEV deliberately throws away when it rasterizes. We did not reopen the anti-carpet epoch or multimodal BEV scope — only the PointNet++ crop that already sees points.
+
+---
+
+### 42. Full-city BEV @ 0.80, infer resume, COPC patch bug, verifier priority (16 Nov, late afternoon)
+
+**Full infer @ 0.20 + `--live`.** First **133k** pass **OOM’d ~49.2k** chips (~2.8M preds). Restarting without resume **wiped** live `predictions.json`. Code fix: **`--resume-live`**, incremental live merge (flush **new** chips into saved preds), no status reset on resume.
+
+**Full infer @ 0.80, no live.** Completed **133k** chips → **`gent_city_gent_canopy_v2_full_080.json.gz`**: **~1.17M** preds (extract floor = threshold). Audit F1 **~0.67** on bundle (strict F1 low — many discoveries). **0.20 city live infer abandoned** for production: too many peaks for RAM and the map.
+
+**Default export.** Center **~10.7k** file archived → `exports/inference/archive/gent_city_gent_canopy_v2_center_10kchips_20251112.json.gz`. **`gent_city_gent_canopy_v2.json.gz`** is now the **full 0.80** city (copy of `_full_080`); `ghent_map.js` / crop QA default path unchanged.
+
+**Stage-2 live on full city.** Started **`filter-export --live`** on **1.17M** detections (v2 verifier). **Paused** after ~1k scores — competes with chip I/O and was queued behind RGB + v3 train. Scoring **1.17M** crops is **GPU-hour scale** (batch it; not the same job as LAZ RGB patch).
+
+**RGB patch ops.** Crashed at chip **~3500**: `*.copc.laz` sidecars indexed as `*.laz` — invalid LAS signature. Fix: **exclude `.copc.laz`** in `index_laz_files`; skip bad paths in `read_laz_bbox`. Resume with `skip_existing`; chunked LAZ read + **`--jobs 1`** on laptop RAM.
+
+**RGB patch — two scopes (do not conflate).**
+
+| Scope | Command / list | Status (16 Nov evening) |
+|-------|----------------|-------------------------|
+| **Crop manifest** (verifier **train** + crop QA) | Default `data-patch-chips-rgb` → unique `chip_id` in `crops_index.parquet` (**16,843**) | **Walk finished** (`reel_then_rgb.log` **15:25**): last run reported **3,041** new writes; **earlier run + skips** mean on-disk is higher |
+| **Full city grid** (verifier on **arbitrary** detection chips) | `--all-chips` + `--only-missing-rgb` → `chips_missing_rgb.parquet` (**~92.8k** missing of **133k**) | **Paused ~19:34** at **~6.3k / 92.8k** (`patch_chip_rgb_resume.log`) — deprioritized for register train gate |
+| **Register-hosting tiles** (v3 **train** gate) | `--register-chips --only-missing-rgb --refresh-missing-manifest` → **`chips_register_missing_rgb.parquet`** (**2,166**) | **In progress** (`patch_chip_rgb_register.log`) |
+
+**On-disk check (mmap `data/processed/chips/*.npz`, 16 Nov ~19:10):**
+
+| Chip set | Unique chips | Valid `rgb` (len = `xyz`) | Still missing |
+|----------|--------------|---------------------------|---------------|
+| All manifest chips (`crops_index`) | 16,843 | **13,522** (~80%) | **3,321** |
+| **Registry-containing** chips (tiles used by `source=register` crop rows) | 10,552 | **8,386** (~79%) | **2,166** |
+
+**Yes — some registry-containing chips are still unpatched.** A “registry chip” here is a **50 m tile that hosts at least one eligible register tree crop**, not “every chip that ever appeared near the register.” **~2.2k** of those tiles still had no usable `rgb` before the register pass (LAZ has no color, bbox read fail, **&lt;90%** xyz match, empty tile, etc.). For **v3_rgb**, crops without `rgb` are **skipped** (not trained with zeros) — that drops **~11.9k / 58.9k** register **rows** (~20%), including **~10.1k** train positives, until those tiles patch.
+
+**Train gate (your bar).** Start **`train-crop` v3_rgb** after register tiles are as complete as patch allows, then recount manifest loadable rows. Full **92.8k** city RGB is **not** required for that gate.
+
+**Full-city RGB duration (corrected).** With **`--only-missing-rgb`** and **`--jobs 1`**, the resume log shows **~80%** of queued chips getting writes and roughly **~100+ chips/min** scan throughput when the job is healthy — **~12–20 h** for **~92.8k**, not multi-day wall time (unless the machine sleeps or the job restarts). Earlier “days” wording mixed up **(a)** million-detection **filter-export** and **(b)** a pessimistic guess before **`--only-missing-rgb`** and chunked LAZ.
+
+**Map QA signal (v2).** High-BEV rings **still** pass on **building walls** in the inner city — columnar returns + GRB negatives don’t catch every façade. **Hypothesis:** RGB on the **crop verifier** (v3) helps separate **vegetation tint / crown spread** from **flat painted walls** better than intensity + class alone.
+
+**For write-up:** Ops lesson — **long jobs need resume and backups** before restart; **extract threshold** is a first-class knob (0.80 for ship, not 0.20 + slider at city scale). **Verifier before RGB** was the wrong queue order.
+
+---
+
+### 43. Register-first RGB, full-city pause, v3 train gate (16 Nov, ~19:30)
+
+**Your bar.** You want **register training crops** covered before **`gent_crop_verifier_v3_rgb`** — not “start v3 on ~80% of chips and silently drop **~20%** of register positives.”
+
+**Mechanism recap.** `in_channels: 9` → no `rgb` ⇒ `extract_crop_from_chip_path` returns **`None`** ⇒ row omitted from batch. No poisoned gradients; **coverage** loss on register trees.
+
+**Ops pivot.** Full-city **`--all-chips --only-missing-rgb`** was **stopped** (~**6.3k / 92.8k** scanned in `patch_chip_rgb_resume.log`) so LAZ I/O targets the **2,166** registry-hosting tiles still missing color, not arbitrary grid order.
+
+**CLI.** **`--register-chips`**: chip list = unique `chip_id` where `crops_index.source == "register"` (**10,552** tiles). With **`--only-missing-rgb`**, manifest file = **`data/manifests/chips_register_missing_rgb.parquet`** (separate from **`chips_missing_rgb.parquet`** for the full grid).
+
+**Command (running):**
+
+```bash
+uv run treelidarnet data-patch-chips-rgb \
+  --register-chips --only-missing-rgb --refresh-missing-manifest --jobs 1
+```
+
+Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **2,166** chips (not the **92.8k** queue).
+
+**After register pass:** mmap-count register rows loadable for v3; optional default manifest re-patch for remaining **~1.1k** non-register manifest gaps; then **`train-crop`**. Resume full-city RGB only when you need verifier color on **off-manifest** detection chips.
+
+**Register pass 1 → 0 writes (bug).** All **2,166** attempts returned false: **3D** rounded-key match used **recomputed h_agl** vs chip `xyz` z; **~88%** matched, below the **90%** gate — so LAZ had RGB but nothing was saved. **Fix:** `_match_rgb_to_chip_xyz` falls back to **(x, y)** keys only (last-wins), then **re-run** `--register-chips` patch.
+
+---
+
+### 44. Dual verifier QA, full RGB, v2/v3 wall findings, discoveries filter (16–17 Nov)
+
+**Map UX — compare v2 and v3 on the same ring.**
+
+| Surface | Behaviour |
+|---------|-----------|
+| **`serve-crop-qa`** | Loads **`gent_crop_verifier_v2/best.pt`** and **`gent_crop_verifier_v3_rgb/best.pt`**; query param **`verifier_mode=compare\|v2\|v3`** |
+| **Click panel** | Side-by-side **Ver v2** / **Ver v3** bars; 9-channel RGB crop when patched |
+| **Halos** | Need **dual live** `filter-export`: each row gets **`verifier_scores: {v2, v3}`**; **outer blue** = v2, **inner green/red** = v3 (`map_layers.js`) |
+| **Makefile** | `viewer-crop-qa`, `filter-export-live-compare` (25k cap), **`filter-export-verifier-full`** (no limit) |
+
+**Live compare (25k pilot, BEV ≥ 0.85).** Completed dual score on **25,000** detections. On **RGB-eligible** subset (**12,226** of 25k):
+
+| Metric | v2 | v3 |
+|--------|----|----|
+| Kept @ 0.5 | ~87.8% | ~87.7% |
+| Register ≤3 m mean score | 0.67 | **0.74**; retention **89% → 96%** |
+| Discovery >5 m retention @ 0.5 | **87%** | **81%** |
+| AUROC (register vs not) | ~**0.50** | **~0.66** |
+
+**Qualitative QA (your eyes).** LiDAR crop **looks like a tree** but **v3 rejects** vs v2 — common pattern: **~983** cases v2≥0.5, v3&lt;0.5 on RGB tiles; **~86%** are **discoveries** (&gt;5 m from register), very high BEV. **~671** have v3 in **0.35–0.5** (threshold tuning). v3 uses **RGB**; BEV does not — v3 often **downscores** LiDAR-plausible peaks when ortho does not match register-style “tree class.” **Not assumed bug** without checking RGB in the 3D panel.
+
+**Prod direction (open).** Combined rule under discussion (e.g. v2 for discovery, v3 for register-near; OR at infer). **Do not** relabel BEV from **v3-low alone** on discoveries — same mistake as using carpet as verifier negatives (§39).
+
+**Crop map — discoveries-only filter.** Toolbar toggle hides predictions within **min distance** of any register stake (haversine + spatial index). **Slider** when enabled; default **2.0 m** (user-tunable **1–15 m**). Independent of audit **5 m** discovery bucket but same spirit for QA.
+
+**Full-grid RGB (17 Nov).** Resumed **`make patch-chips-rgb-full`** (`--all-chips --only-missing-rgb --refresh-missing-manifest --jobs 1`). Queue **83,290** chips; **`Done: rgb on 79,460 chips (83,290 requested)`** — remainder = no LAZ color, match fail, or empty. Register + manifest passes had already completed (**2,165** + **1,155**). v3 scoring off-manifest detections is now **much** better covered on disk.
+
+**Full verifier “infer” (17 Nov).** User meant **`filter-export`**, not BEV **`infer-gent`**. Job: **`filter-export-verifier-full`** → **530,258** inputs @ **BEV ≥ 0.85** (not full **~1.17M** @ 0.20), dual v2+v3, streams to **`exports/inference/live/verified_predictions.json`**, output gz **`gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz`**. Log: **`data/logs/filter_export_verifier_full.log`**. Wall time: **multi-day** (2× forward per detection).
+
+**Near miss — BEV re-infer.** Assistant briefly started **`make infer-gent-full`** (same path as shipped export). Stopped **~16k/133k** chips. **`gent_city_gent_canopy_v2.json.gz`** still **Nov 16 13:39**, **~29M**, **~1.17M** preds — **`infer-gent` only writes gz after full 133k loop** (non-live).
+
+**Weights and git.** **`runs/`**, **`*.pt`** are **gitignored** — checkpoints stay local; share via releases / copy, not repo commits.
+
+**Asked later: train BEV on high-verifier predictions?** Possible as **sparse pseudo-labels** (consensus high on discoveries; hard neg only with GRB + dual reject). **Not** silver bullet: circular with verifier, v3 RGB cue invisible to 4-ch BEV, risks killing discoveries. Prefer **frozen BEV + dual verifier** until carpet/discovery tradeoff is nailed on **post–full-RGB** scores.
+
+**For write-up:** Second-stage story is **two specialists** (LiDAR geometry vs LiDAR+RGB), not one score. Full-city RGB was the gate for fair v3 map QA, not a BEV retrain.
+
+---
+
+## Where we left off (17 Nov 2026, ~11:15)
+
+**Detector (unchanged):** `best.pt` === **`epoch3_hot`**. **Shipped city export:** **`gent_city_gent_canopy_v2.json.gz`** @ **0.80** peak extract, **133k** chips, **~1.17M** preds (file **not** overwritten 17 Nov — mistaken infer killed mid-pass).
+
+**Verifier (active):**
+
+| Item | State |
+|------|--------|
+| City BEV export | `exports/inference/gent_city_gent_canopy_v2.json.gz` (full **0.80**) |
+| v2 / v3 | **`runs/gent_crop_verifier_v2/best.pt`**, **`runs/gent_crop_verifier_v3_rgb/best.pt`** (v3 **`best` ~epoch 14**, val F1 ~**0.899**) |
+| RGB — register + manifest | **Done** — **2,165** + **1,155** writes |
+| RGB — full grid | **Done** — **79,460 / 83,290** (`patch_chip_rgb_full_city.log`); `make patch-chips-rgb-full` |
+| Dual live compare (pilot) | **25k** @ 0.85 complete; **`verified_v2_v3.json.gz`** |
+| Full dual verifier score | **In progress** — **530,258** @ **0.85**, `filter-export-verifier-full` → `_v2_v3_full.json.gz` |
+| Crop QA | **`make viewer-crop-qa`** — compare clicks + halos; **discoveries-only** + distance slider (**2 m** default) |
+| Checkpoints in git | **No** — `runs/`, `*.pt` ignored |
+
+**Next steps (ordered):**
+
+1. **Finish** **`filter-export-verifier-full`**; build **explorer bundle** from output.
+2. **§45 — Flask end-product QA explorer** (unified server: HugATree-style map + crop 3D on click).
+3. Tune **verifier combine presets** in explorer (v2/v3 OR/AND, register split, disagreement layer) — not BEV retrain first.
+4. Optional: export visible subset GeoJSON for Ghentree integration.
+
+**BEV rule unchanged:** any replacement of frozen `best.pt` must pass **`qa-checkpoint-center`**. Pseudo-label from verifier is **experimental** (§44), not current plan.
+
+---
+
+### 45. Planned: Flask end-product QA explorer (17 Nov)
+
+**Goal.** After full dual verifier scoring, a **local Flask** app replaces day-to-day **`serve-crop-qa`** for **end-product testing**: HugATree map chrome (dark MapLibre, glass toolbar, loader), **all** detections in memory (columnar **`.bin`** bundle, no 25k cap), **sliders + combine modes** for what counts as a tree, optional heatmap LOD at low zoom with full dataset underneath.
+
+**Architecture (approved plan).**
+
+| Piece | Detail |
+|-------|--------|
+| **Build** | `data-build-explorer-bundle` → `exports/inference/explorer/` (`detections.bin`, `register.bin`, `meta.json`); `dist_register_m` via cKDTree; optional `has_rgb` |
+| **Serve** | `serve-explorer` — **`/explorer`** map + **`/api/crop/wgs84`** (extract `CropQAService` shared with Starlette) |
+| **Perf** | One fetch ~13 MB; filter mask in **Web Worker**; Deck.GL **binary** scatter; heatmap when `zoom < 12` |
+| **Combine modes** | v2/v3 only, AND/OR, max/min, weighted, **register_split**, disagreement highlight |
+| **Filters** | BEV min, per-verifier thresholds, discoveries-only distance, require RGB |
+
+**Ghentree path.** Same scatter record shape as HugATree; explorer is the PoC before overlaying model detections on municipal DB.
+
+**Out of scope for v1.** Public deploy, HugATree DB/hugs, BEV retrain from verifier labels.
+
+**Status:** Planned; implementation starts after **`filter-export-verifier-full`** completes (or interim bundle from live JSON).
 
 ---
 
@@ -840,7 +1067,26 @@ One epoch, from `best.pt` (step **110,242**), after `data-patch-chips-ignore`. N
 | 12 Nov morning | **Second strip downloaded; penalize mid-score unlabeled peaks** | **1,864** new LAZ files. Index keeps every file per corner. Loss term is the mean of unlabeled local maxima in **[0.20, 0.90)**, weight **0.1**, **2 m** window. Peaks at **≥ 0.90** are outside it. One epoch from `best.pt` after the empty-chip rebuild and the ignore patch |
 | 12 Nov ~10:50 | **epoch4 flat map** | weight **0.1** collapsed scores to ~**0.20**; restore **`epoch3_hot`** |
 | 12 Nov ~11:10 | **epoch4b anticarpet + QA** | weight **0.01**, band **0.45–0.88**; center QA failed high-conf recall; revert **`best.pt`** |
-| 12 Nov ~11:20 | **Freeze BEV; PointNet verifier** | Carpet acceptable at **0.85** view; do **not** label carpet/discovery peaks as verifier negatives (§39) |
+| 12 Nov ~11:20 | **Freeze BEV; crop verifier** | Carpet acceptable at **0.85** view; do **not** label carpet/discovery peaks as verifier negatives (§39) |
+| 16 Nov | **PointNet++ verifier first** | Skip plain PointNet staging; two-scale SA on ~512-pt crops ([docs/SPEC.md](docs/SPEC.md) §6.5) |
+| 16 Nov | **Full register on crop map** | HugATree one-shot load; no bbox refetch |
+| 16 Nov | **Verifier val must include negatives** | Hash-split GRB rows; val ~1.5k neg |
+| 16 Nov | **Skip empty crops in train** | No zero-placeholder tensors with real labels |
+| 16 Nov | **Balanced BCE + val F1 checkpoint** | Filter goal is specificity, not lowest BCE |
+| 16 Nov | **`gent_crop_verifier_v2` run** | Do not trust v1 val loss; rebuild index first |
+| 16 Nov | **RGB on verifier only** | DHMV has RGB; BEV stays frozen; patch npz + 9-ch PointNet++ (`v3_rgb`) |
+| 16 Nov PM | **Full city infer @ 0.80** (no live) | 0.20 live OOM; ~1.17M preds shippable; default export promoted |
+| 16 Nov PM | **`--resume-live` on infer-gent** | Never restart full live from chip 0 without backing up `live/` |
+| 16 Nov PM | **Skip `.copc.laz` in LAZ index** | RGB patch crashed on invalid COPC sidecars; real `.laz` siblings kept |
+| 16 Nov PM | **RGB patch > full live verifier** | v3 color training before scoring 1.17M detections |
+| 16 Nov ~19:30 | **Pause full-grid RGB; `--register-chips` first** | v3 must not drop ~20% register positives; **2,166** tiles before train |
+| 16 Nov PM | **v3_rgb `best.pt`** by val F1 @ 0.5 | Epoch **14**, F1 **~0.899**; `latest` higher precision, lower recall |
+| 16–17 Nov | **Dual verifier on crop QA** | Live rows carry **`verifier_scores {v2,v3}`**; compare UI + halos |
+| 17 Nov | **Full-grid RGB done** | **79,460** writes; **`make patch-chips-rgb-full`** |
+| 17 Nov | **`filter-export-verifier-full`** not `infer-gent` | **530,258** @ **BEV ≥ 0.85**; dual score; BEV gz unchanged if infer aborted mid-run |
+| 17 Nov | **Discoveries-only map filter** | Hide preds near register; **2 m** default slider |
+| 17 Nov | **BEV ← verifier pseudo-labels** | Deferred; use dual infer rules first (§44) |
+| 17 Nov | **Flask QA explorer (§45)** | Unified HugATree-style map after full dual verify; columnar bundle + combine presets |
 
 ---
 
@@ -861,14 +1107,26 @@ One epoch, from `best.pt` (step **110,242**), after `data-patch-chips-ignore`. N
 | Full live infer | 10 686 chips, `gent_canopy_v2/best.pt`, `ghent_live.html` |
 | Git | `2c5f620` cleared the ignore ring in code and put register chips first. The faster infer (§31) is the commit after that |
 | Map QA (10 Nov evening) | Large crowns weak; street trees and discoveries strong |
-| Export policy | Min confidence **0.20** at infer; map slider from 0.20 up (`infer-gent --score-threshold 0.2`) |
+| Export policy | **Shipped** full city @ **0.80** extract (`gent_city_gent_canopy_v2.json.gz`, **~1.17M** preds). Center-only export archived. Slider still filters view |
+| Full city infer | **133k** @ **0.80**, non-live — Done 16 Nov (`infer_full_080.log`) |
+| Live infer | **0.20** full pass **OOM ~49k**; **`--resume-live`** added; avoid 0.20 + live at city scale |
 | Second live pass | Re-infer 10 686 with `--live` + 0.20 floor (`infer_conf02_live.log`) |
 | Heatmap patch | **50 451** chips; GRB refresh | `patch_heatmap.log` — Done |
 | Full grid | **133,000** index; **10,686** positive | `chips_index_full.parquet` |
 | Heatmap σ | Per-tree from `stamomtrek` | In all built/patched chips |
 | Confidence GIF | 20%↔40% on the 10 Nov city export: 46,760 preds at 0.20, 981 at 0.40 |
 | Next loss | **Per-tree peak loss** weight **0.01**, fp32, grad clip **5.0** (§21). Then held-out **audit** F1 |
-| Later model | **Candidate network** (§19, §36, §37, §39) | **Active next step.** PointNet verifier; negatives = GRB + `hard_negative` peaks only, not carpet/discovery rows |
+| Later model | **Candidate network** (§19, §36, §37, §39) | PointNet++ v2 done; **v3_rgb** after register RGB gate (§43) |
+| Crop manifest | `crops_index.parquet` | **73.7k** rows; **58.9k** register rows — **~46.9k** loadable for v3 pre–register pass (**~11.9k** skipped) |
+| Verifier run | `runs/gent_crop_verifier_v2/` | `best.pt` by val **F1** (~0.88) |
+| Verifier RGB (manifest) | default `data-patch-chips-rgb` | **First walk complete** (16,843 scanned); **~80%** chips valid on disk |
+| Verifier RGB (register) | `--register-chips` | **Done** — **2,165** (`patch_chip_rgb_register.log`) |
+| Verifier RGB (manifest gap) | remainder manifest | **Done** — **1,155** |
+| Verifier RGB (full grid) | `patch-chips-rgb-full` | **Done** — **79,460 / 83,290** |
+| v3 train | `gent_crop_verifier_v3_rgb` | **`best.pt`** val F1 **~0.899** (epoch 14) |
+| Dual verifier live | `filter-export --live` + v2+v3 | Pilot **25k** done; **full 530k** running |
+| Crop QA | `serve-crop-qa` :8765 | Dual scores; discoveries filter **2 m** slider |
+| LinkedIn reel | `scripts/render_verifier_linkedin_reel.py` | MP4: map zoom + RGB splat; needs ffmpeg + verified JSON |
 
 ---
 
@@ -876,13 +1134,16 @@ One epoch, from `best.pt` (step **110,242**), after `data-patch-chips-ignore`. N
 
 - **Coverage:** Full **133k** chip index for **infer**; **train** oversamples **~10.7k** register chips (§16).
 - **Checkpoint:** Live **`best.pt` is frozen to `epoch3_hot`**. Promote only after **`qa-checkpoint-center`** passes (§39).
-- **Loss / carpet:** Anti-carpet BEV experiments **hurt high-conf stakes** or **flattened** the map (§39). Carpet at export **0.20** is expected on epoch3; **0.85** view + **PointNet verifier** is the chosen path. Ignore ring cleared in train via `clear_stored_ignore`.
+- **Loss / carpet:** Anti-carpet BEV experiments **hurt high-conf stakes** or **flattened** the map (§39). Carpet at export **0.20** is expected on epoch3; **0.85** view + **PointNet++ verifier** is the chosen path. Ignore ring cleared in train via `clear_stored_ignore`.
 - **Shape:** The U-Net sees averaged cells. Height above ground is stored per point and not used. A wider net is not the next step. Height-summary channels, then the crop model (§19, §24).
 - **Validation:** No held-out F1 in the train loop. After infer, the map shows audit F1 (primary) and strict F1 (secondary), frozen at the export floor.
 - **Large trees / clusters:** §10 + §14 — σ helps singles; **silent clusters** are weak/missing peaks, not mainly NMS.
-- **Threshold:** Export floor now **0.20** (infer); val tuning still future; slider on full map for QA.
+- **Threshold:** **Production export 0.80** on full grid; **0.20** kept for small diagnostics only. Slider on map for stricter view.
 - **Multimodal:** Satellite + LiDAR raised by you; not implemented (DSM/DTM optional future).
-- **Candidate model:** **Next implementation** (§39). PointNet on register crops + **GRB / hard_negative** negatives only; do not train on unlabeled canopy as label-0. Runs on detections at infer. Leaf-off LiDAR will not reproduce full `sortiment`.
+- **Candidate model:** **v2 + v3_rgb** both on map (§44). v3 helps **register** ranking; v2 kinder on **discoveries**. Wall FPs persist on v2 alone. Full **530k** dual score in flight. Combined prod rule **TBD**. Still missing: detector-peak hard negatives as verifier train negs, systematic threshold sweep on full dual export.
+- **BEV retrain on verifier labels:** discussed **17 Nov** — only with conservative mining; default stay **frozen epoch3_hot** (§44).
+- **RGB / season:** DHMV is **2013–2015**, leaf-off; RGB helps crown texture and QA visuals but is not summer inventory ground truth.
+- **Crop QA / ops:** TensorBoard is manual; training does not spawn it. Crop map needs parquet + chips on disk.
 - **Flanders-wide / OSM:** Stated as later-stage generalization and optional alignment data.
 - **Ops:** QGIS + parallel heavy jobs compete with train/infer on same machine. Training **stalls** on cold chip cache; warm cache gives ~**20 ms/step** (§39).
 - **Coverage holes:** Second-strip download and empty-chip rebuild **done** for training index (§38). Remaining east–west streak QA is separate from the verifier pivot.
@@ -900,8 +1161,8 @@ One epoch, from `best.pt` (step **110,242**), after `data-patch-chips-ignore`. N
 | [docs/DEV.md](docs/DEV.md) | Commands: train, infer-gent, live viewer |
 | [docs/VISUALIZATION.md](docs/VISUALIZATION.md) | Map layers and bundles |
 
-§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs. §37: that classifier is a PointNet verifier first, then a small two-scale PointNet++ if poles and shrubs still pass. §38: second strip on disk; empty-chip rebuild; first anti-carpet term at weight **0.1** (failed). §39: freeze **`epoch3_hot`**; light anti-carpet failed QA; **PointNet verifier** next with **safe negatives** (not carpet as label-0).
+§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs. §37: **PointNet++** crop verifier (16 Nov: skip plain PointNet). §38: second strip on disk; empty-chip rebuild; first anti-carpet term at weight **0.1** (failed). §39: freeze **`epoch3_hot`**; light anti-carpet failed QA; **PointNet++ verifier** next with **safe negatives** (not carpet as label-0). §40: crop QA viewer; verifier training hygiene (val negatives, balanced BCE, skip bad crops, F1 checkpoint); **`gent_crop_verifier_v2`**. §41: **verifier-only RGB** — patch LAZ color into crop chips; **`gent_crop_verifier_v3_rgb`**. §42: **full city @ 0.80**, infer **resume-live**, export promotion, **COPC** patch fix, **RGB before** million-detection verifier. §43: **register-first RGB**, xy **matcher fix**, register + manifest patch. §44: **dual v2/v3 QA**, **full-grid RGB done**, **530k dual filter-export**, discoveries map filter, **no BEV overwrite** on aborted infer, **verifier-as-BEV-teacher** deferred. §45: **Flask explorer** — HugATree UX, full columnar dataset, verifier combine UI (planned).
 
 ---
 
-*Design diary through 12 Nov 2026, late morning: … second strip rebuild, failed anti-carpet BEV (flat epoch4 and QA-failed epoch4b), center QA gate, freeze epoch3_hot for the map, pivot to PointNet verifier with GRB/hard_negative negatives only (not discovery/carpet label-0), and wall-clock vs stepping time on the full chip index. For code state, see git history on `main`.*
+*Design diary through **17 Nov 2026**: BEV @ 0.80 shipped and unchanged; **v3_rgb** trained; **full-grid RGB** patched; **dual verifier** scoring @ BEV≥0.85 in progress; next = **Flask end-product explorer** (§45). Checkpoints not in git. For code state, see git history on `main`.*

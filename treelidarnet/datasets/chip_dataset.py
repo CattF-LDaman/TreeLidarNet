@@ -19,10 +19,12 @@ class ChipDataset(Dataset):
         *,
         grid_size: int | None = None,
         labels: bool = True,
+        clear_stored_ignore: bool = False,
     ) -> None:
         self.paths = chip_paths
         self.grid_size = grid_size or grid_cells()
         self.labels = labels
+        self.clear_stored_ignore = clear_stored_ignore
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -52,7 +54,10 @@ class ChipDataset(Dataset):
                 origin = torch.from_numpy(np.array(data["origin"], dtype=np.float64, copy=True))
                 return {"bev": bev, "origin": origin}
             heatmap = torch.from_numpy(data["heatmap"].astype(np.float32))
-            ignore = torch.from_numpy(data["ignore"].astype(np.float32))
+            if self.clear_stored_ignore:
+                ignore = torch.zeros_like(heatmap)
+            else:
+                ignore = torch.from_numpy(data["ignore"].astype(np.float32))
             if "unknown" in data:
                 unknown = torch.from_numpy(data["unknown"].astype(np.float32))
             else:

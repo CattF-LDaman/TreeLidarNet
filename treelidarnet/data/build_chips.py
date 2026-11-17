@@ -19,7 +19,7 @@ from treelidarnet.data.chips import (
 )
 from treelidarnet.data.grb import GrbIndex, make_hard_negative_mask
 from treelidarnet.data.ground import height_above_ground
-from treelidarnet.data.laz_io import read_laz_bbox
+from treelidarnet.data.laz_io import dedupe_points, read_laz_bbox
 from treelidarnet.paths import chips_dir, manifests_dir
 
 
@@ -44,15 +44,21 @@ def build_chip(
     dtm_path: Path | None,
     out_dir: Path | None = None,
     grb_index: GrbIndex | None = None,
+    cloud: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> tuple[Path, dict]:
     out_dir = out_dir or chips_dir()
     x1, y1 = x0 + CHIP_SIZE_M, y0 + CHIP_SIZE_M
-    xyz, feat = read_laz_bbox(laz_paths, xmin=x0, ymin=y0, xmax=x1, ymax=y1)
+    if cloud is None:
+        xyz, feat = read_laz_bbox(laz_paths, xmin=x0, ymin=y0, xmax=x1, ymax=y1)
+    else:
+        xyz, feat = cloud
+        if len(xyz):
+            xyz, feat = dedupe_points(xyz, feat)
     h_agl, qc = height_above_ground(xyz, feat, dtm_path=dtm_path)
     n = grid_cells()
     chip_trees = _trees_in_chip(trees_df, x0, y0, CHIP_SIZE_M)
     tree_xy = [
-        (float(r.x), float(r.y), heatmap_sigma_m(r.get("stamomtrek")))
+        (float(r["x"]), float(r["y"]), heatmap_sigma_m(r.get("stamomtrek")))
         for r in chip_trees.to_dict("records")
     ]
     heatmap = rasterize_heatmap(tree_xy, origin_x=x0, origin_y=y0)
