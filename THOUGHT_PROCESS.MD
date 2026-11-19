@@ -4,6 +4,8 @@
 **Repo:** [TreeLidarNet](https://github.com/CattF-LDaman/TreeLidarNet) · references: HugATree, LuweDaman (Deck.GL map UX)  
 **Purpose of this file:** A readable narrative for a **project write-up** — what we wanted, how the goal changed, what we built and observed. Technical truth lives in `docs/SPEC.md`, `docs/TASK_GHENT_BROAD.md`, `docs/LABELS.md`, `docs/EVAL.md`.
 
+**Dates in this diary:** Narrative timeline = **10–19 November 2026**. A few **on-disk labels** still say **2025** in the name (e.g. `runs/gent_canopy_v2/archive/pre_full_grid_2025-11-11/`, `…_20251112.json.gz` in export archives) from when those folders were created; configs point at those literal paths. For a polished report, read “11 Nov” in prose as **Nov 2026** unless a quoted path is shown.
+
 ---
 
 ## One-page story
@@ -121,6 +123,7 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **19 Nov PM (ask)** | **v2 + v3 is the product** | LiDAR-only v2 kinder on discoveries; RGB v3 stronger on register-like crowns; **combine policy** is the spine — not “pick one verifier” |
 | **19 Nov PM (ask)** | **RGB in v3** | **Per-point** DHMV color on the ~512 crop — **not** ortho/satellite tiles; MapLibre basemap is human QA only |
 | **19 Nov PM (ask)** | **Explorer score display** | Bundle **bev/v2/v3 as-is** (0–1 sigmoid / heatmap); combine sliders use raw values; **map hue** min–max over **visible** detections only |
+| **19 Nov PM** | **§48 Post-re-export FP loop** | Frozen BEV; full weighted re-export first; later flags → incremental `_fp` fine-tune + **filter-export** on same gz |
 
 ---
 
@@ -986,10 +989,10 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 
 **Next steps (ordered):**
 
-1. **QA pass in explorer** — flag **obvious building / non-tree** peaks (**~30–80 diverse** archetypes before first retrain).
-2. **`data-build-crop-index`** (picks up flags) → **`train-crop`** v2 + **`gent_crop_verifier_v3_rgb.yaml`** → **`filter-export-verifier-full`** + **`explorer-bundle`**.
-3. If flags under-train: **~10–20× sampler weight** on `source=explorer_fp` (deferred; try vanilla once).
-4. ~~Align prod export with explorer combine~~ **Done (§47):** default **weighted @ combo-t 0.45**; explorer still free to use stricter combine for end-product preview.
+1. **Full verifier re-export on frozen BEV** — **`make filter-export-verifier-full`** (weighted **@ 0.45**, current or `_fp` ckpts) → **`make explorer-bundle`** (§47).
+2. **QA on that bundle** — flag **diverse** building FPs; use **Hide flagged** + combine sliders for end-product preview (§45).
+3. **Later FP batches (§48):** `data-build-crop-index` → incremental **`train-crop`** from `*_fp/best.pt` (**5–8 epochs**) or full **15** from baseline if large refresh → **`filter-export-verifier-full`** again (same BEV gz) → bundle → **`eval-explorer-flags`**.
+4. Optional: promote `_fp` paths in Makefile / **`serve-explorer --rescore-on-click`**; tighten explorer combine before changing export combo-t.
 5. Optional: GRB **point-in-building** veto at export (not v1); deep-scan ROI grid (separate idea).
 
 **BEV rule unchanged:** frozen **`epoch3_hot`** unless **`qa-checkpoint-center`** passes on a replacement.
@@ -1082,6 +1085,50 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 
 ---
 
+### 48. Post–re-export FP iteration (frozen BEV) (19 Nov)
+
+**Assumption.** **BEV stays frozen** (`epoch3_hot`, **`gent_city_gent_canopy_v2.json.gz`** @ **0.80** unchanged). All product iteration is **verifier + export gate + explorer combine** on the **same detection peaks**. You only re-run **`infer-gent`** if the heatmap checkpoint changes (not planned).
+
+**Two phases**
+
+| Phase | What | Outputs |
+|-------|------|---------|
+| **A — Baseline product** | Full dual score + **weighted keep @ 0.45** on BEV≥0.85 pool | `…_verified_v2_v3_full.json.gz` → **`explorer-bundle`** |
+| **B — FP loop** | Flag in explorer → index → fine-tune v2/v3 → **filter-export again** (same BEV gz in) → new bundle | Updated **v2/v3** on disk; map reflects new scores after bundle rebuild |
+
+**When to flag more FPs (after phase A).** Use the **re-exported** map as truth for QA. Add **new** failure modes (diverse buildings, ridges, glass, sheds) — not dozens on one roof. Old flags stay in `explorer_qa_flags.parquet` unless **Unflag**; `data-build-crop-index` merges **all active** flags each time.
+
+**Retrain strategy (second and later passes)**
+
+| Situation | Suggested approach |
+|-----------|-------------------|
+| **+20–50 new flags**, prior `_fp` run helped | **`resume_from`** → **`runs/…_fp/best.pt`** (or latest `*_fp2*`); **5–8 epochs**, optional **lr `2e-4`** override on CLI if added; keep **loss×15 / sample×10** until flag count is large |
+| **Major refresh** (~100+ new flags, or drift on discoveries) | **`resume_from`** → **pre-FP baseline** `gent_crop_verifier_v2/best.pt` / `gent_crop_verifier_v3_rgb/best.pt`; **15 epochs @ 0.0005** (configs default) — relearns **all** flags from a clean verifier |
+| **Same 15 epochs again every small batch** | **OK but wasteful** — val F1 gate limits damage; risk **slow drift** on discoveries / marginal trees; prefer **shorter incremental** runs |
+
+**Always between verifier trains**
+
+1. **`eval-explorer-flags`** → `exports/qa/explorer_fp_rescore.parquet` (baseline vs new ckpt on flagged sites).
+2. Explorer **`serve-explorer --rescore-on-click`** with **`_*_fp/best.pt`** — spot **discoveries** and register trees, not only flagged pins.
+3. **`best.pt` by val F1** — if train run looks worse, keep previous `_fp` checkpoint for export.
+
+**Re-export (phase B tail)**
+
+- Input: **unchanged** `exports/inference/gent_city_gent_canopy_v2.json.gz`.
+- Verifier ckpts: promoted `*_fp` (or new `*_fp2`) weights; Makefile **`filter-export-verifier-full`** (**weighted 0.45**).
+- **`make explorer-bundle`** on the new verified gz — no BEV re-infer.
+- Optional: point Makefile **`serve-explorer --rescore-on-click`** at `_fp` ckpts until you promote them to default paths.
+
+**Do not**
+
+- Re-infer the city for FP fixes alone.
+- Expect global val F1 to move much — judge **flag rescoredown** + manual discovery QA.
+- Drop **weighted blend** for export without checking discovery retention (v3-only was harsher).
+
+**Naming.** New runs: `--run-name gent_crop_verifier_v2_fp2` (etc.) so **`epoch3_hot`** and baseline verifier dirs stay untouched.
+
+---
+
 ## Decision log
 
 | When | Decision | Rationale |
@@ -1165,6 +1212,7 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 | 19 Nov | **Building FPs: flag + retrain first** | GRB ≠ peak geometry; optional stricter v3 threshold / future export combine; **no** FP-only finetune |
 | 19 Nov | **`explorer_fp` loss upweight** | **Deferred** — vanilla retrain once, then 10–20× sampler if needed |
 | 19 Nov PM | **§47 weighted export @ 0.45** | Align prod keep with dual-verifier story; looser than v3-only 0.5; explorer stricter filters stay QA |
+| 19 Nov PM | **§48 frozen-BEV FP loop** | Full weighted re-export first; later flags → incremental `_fp` train + re-`filter-export`, no `infer-gent` |
 
 ---
 
@@ -1177,7 +1225,7 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 | Labels | ~59k eligible register points in chips |
 | v1 run | `runs/gent_real_v1/best.pt` — register matcher baseline |
 | v2 config | `configs/gent_canopy_v2.yaml` — 10 epochs planned |
-| v2 epoch loss (10.7k, 10 Nov) | ~0.000336 → ~0.000332; archived in `pre_full_grid_2025-11-11` |
+| v2 epoch loss (10.7k, 10 Nov 2026) | ~0.000336 → ~0.000332; on-disk archive dir `pre_full_grid_2025-11-11` (name predates calendar fix) |
 | v2 epoch loss (133k, 11 Nov) | Epoch 1 **0.000394**; epoch 2 **0.000366** (grid only) @ step 75,500. Epoch 3 total **0.0021** at step **110,242** (`epoch3_hot` / live `best.pt`). That total includes `0.01 × loss/tree` |
 | v2 failed anti-carpet (12 Nov) | **epoch4_flat** ~**0.021** @ 143k (flat heatmap). **epoch4b** ~**0.0039** @ 155k — QA fail, reverted |
 | v2 QA gate | `qa-checkpoint-center`: rings/chip + ≥0.90 stake recall on 400 center chips |
@@ -1241,8 +1289,8 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 | [docs/DEV.md](docs/DEV.md) | Commands: train, infer-gent, live viewer |
 | [docs/VISUALIZATION.md](docs/VISUALIZATION.md) | Map layers and bundles |
 
-§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs. §37: **PointNet++** crop verifier (16 Nov: skip plain PointNet). §38: second strip on disk; empty-chip rebuild; first anti-carpet term at weight **0.1** (failed). §39: freeze **`epoch3_hot`**; light anti-carpet failed QA; **PointNet++ verifier** next with **safe negatives** (not carpet as label-0). §40: crop QA viewer; verifier training hygiene (val negatives, balanced BCE, skip bad crops, F1 checkpoint); **`gent_crop_verifier_v2`**. §41: **verifier-only RGB** — patch LAZ color into crop chips; **`gent_crop_verifier_v3_rgb`**. §42: **full city @ 0.80**, infer **resume-live**, export promotion, **COPC** patch fix, **RGB before** million-detection verifier. §43: **register-first RGB**, xy **matcher fix**, register + manifest patch. §44: **dual v2/v3 QA**, **full-grid RGB done**, **530k dual filter-export**, discoveries map filter, **no BEV overwrite** on aborted infer, **verifier-as-BEV-teacher** deferred. §45: **Flask explorer** — HugATree UX, **402k** columnar bundle, combine + Style UI (**shipped** 19 Nov). §46: **`explorer_fp`** manual flags → crops_index → verifier retrain; building-peak negatives. §47: **weighted dual export** **0.5·v2+0.5·v3 ≥ 0.45**; per-point RGB semantics; raw vs visible-normalized map colours.
+§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs. §37: **PointNet++** crop verifier (16 Nov: skip plain PointNet). §38: second strip on disk; empty-chip rebuild; first anti-carpet term at weight **0.1** (failed). §39: freeze **`epoch3_hot`**; light anti-carpet failed QA; **PointNet++ verifier** next with **safe negatives** (not carpet as label-0). §40: crop QA viewer; verifier training hygiene (val negatives, balanced BCE, skip bad crops, F1 checkpoint); **`gent_crop_verifier_v2`**. §41: **verifier-only RGB** — patch LAZ color into crop chips; **`gent_crop_verifier_v3_rgb`**. §42: **full city @ 0.80**, infer **resume-live**, export promotion, **COPC** patch fix, **RGB before** million-detection verifier. §43: **register-first RGB**, xy **matcher fix**, register + manifest patch. §44: **dual v2/v3 QA**, **full-grid RGB done**, **530k dual filter-export**, discoveries map filter, **no BEV overwrite** on aborted infer, **verifier-as-BEV-teacher** deferred. §45: **Flask explorer** — HugATree UX, **402k** columnar bundle, combine + Style UI (**shipped** 19 Nov). §46: **`explorer_fp`** manual flags → crops_index → verifier retrain; building-peak negatives. §47: **weighted dual export** **0.5·v2+0.5·v3 ≥ 0.45**; per-point RGB semantics; raw vs visible-normalized map colours. §48: **frozen BEV** product loop — full re-export then **incremental FP** fine-tune + re-export on same detection gz.
 
 ---
 
-*Design diary through **19 Nov 2026**: BEV **epoch3_hot** frozen; **v2 + v3_rgb** verifiers trained; **full dual export** @ BEV≥0.85; **Flask explorer** live; **manual FP flags** + **`explorer_fp`** retrain loop; **export keep** → **weighted @ 0.45** (§47). Checkpoints not in git. Session transcripts: agent chat **explorer QA / FP flags** and **weighted export / RGB / scores** (Nov 19). For code state, see git history on `main`.*
+*Design diary through **19 Nov 2026**: BEV **epoch3_hot** frozen; **v2 + v3_rgb** verifiers trained; **full dual export** @ BEV≥0.85; **Flask explorer** live; **manual FP flags** + **`explorer_fp`** retrain loop; **export keep** → **weighted @ 0.45** (§47); **post-re-export FP iteration** on same BEV gz (§48). Checkpoints not in git. Session transcripts: agent chat **explorer QA / FP flags**, **weighted export / RGB / scores**, **incremental FP strategy** (Nov 19). For code state, see git history on `main`.*

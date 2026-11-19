@@ -125,4 +125,11 @@ uv run treelidarnet data-build-crop-index   # adds label=0 source=explorer_fp ro
 # uv run treelidarnet eval-explorer-flags   # → exports/qa/explorer_fp_rescore.parquet
 ```
 
+**Frozen BEV, verifier-only product loop** (see `THOUGHT_PROCESS.MD` §47–§48):
+
+1. **Once (or after checkpoint promote):** `make filter-export-verifier-full` then `make explorer-bundle` — scores **~402k** peaks on unchanged `gent_city_gent_canopy_v2.json.gz` (BEV @ 0.80, **weighted combo ≥ 0.45**).
+2. **QA in explorer** — flag new false positives; old flags remain until unflagged.
+3. **After more flags:** `data-build-crop-index` → `train-crop` with `--run-name …_fp2` (incremental: point config `resume_from` at prior `…_fp/best.pt`, **5–8 epochs**; large batch: resume baseline `best.pt`, **15 epochs** as in yaml) → `eval-explorer-flags` → `make filter-export-verifier-full` (same BEV input, new verifier ckpts) → `make explorer-bundle`.
+4. Do **not** re-run `infer-gent` for verifier/FP work alone.
+
 Needs `data/manifests/gent_trees.parquet` and chip `.npz` files. Optional: city export path in the map toolbar (default `exports/inference/gent_city_gent_canopy_v2.json.gz`).
