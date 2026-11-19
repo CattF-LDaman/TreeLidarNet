@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -52,21 +51,22 @@ def score_detections_with_model(
     num_points: int = 512,
     min_points: int = 32,
     progress_base: int = 0,
+    infer_batch_size: int = 64,
+    on_progress=None,
 ) -> list[Detection]:
-    out: list[Detection] = []
-    for i, det in enumerate(detections):
-        prob = score_detection(
-            model,
-            x=det.x,
-            y=det.y,
-            device=device,
-            radius_m=radius_m,
-            num_points=num_points,
-            min_points=min_points,
-            seed=hash((det.x, det.y, progress_base + i)) % (2**31),
-        )
-        out.append(replace(det, verifier_score=prob))
-    return out
+    from treelidarnet.verifier_batch import score_detections_batched
+
+    return score_detections_batched(
+        detections,
+        model,
+        device=device,
+        radius_m=radius_m,
+        num_points=num_points,
+        min_points=min_points,
+        progress_base=progress_base,
+        infer_batch_size=infer_batch_size,
+        on_progress=on_progress,
+    )
 
 
 def score_detections_dual(
@@ -79,34 +79,24 @@ def score_detections_dual(
     num_points: int = 512,
     min_points: int = 32,
     progress_base: int = 0,
+    infer_batch_size: int = 64,
+    on_progress=None,
 ) -> tuple[list[Detection], list[dict[str, float]]]:
-    """Score each detection with v2 (6ch) and v3 (9ch+RGB); same points, same order."""
-    scored_v2 = score_detections_with_model(
+    """Score each detection with v2 (6ch) and v3 (9ch+RGB); same order as legacy loop."""
+    from treelidarnet.verifier_batch import score_detections_dual_batched
+
+    return score_detections_dual_batched(
         detections,
         model_v2,
-        device=device,
-        radius_m=radius_m,
-        num_points=num_points,
-        min_points=min_points,
-        progress_base=progress_base,
-    )
-    scored_v3 = score_detections_with_model(
-        detections,
         model_v3,
         device=device,
         radius_m=radius_m,
         num_points=num_points,
         min_points=min_points,
-        progress_base=progress_base + 1,
+        progress_base=progress_base,
+        infer_batch_size=infer_batch_size,
+        on_progress=on_progress,
     )
-    out: list[Detection] = []
-    scores: list[dict[str, float]] = []
-    for det, d2, d3 in zip(detections, scored_v2, scored_v3, strict=True):
-        v2 = float(d2.verifier_score or 0.0)
-        v3 = float(d3.verifier_score or 0.0)
-        scores.append({"v2": v2, "v3": v3})
-        out.append(replace(det, verifier_score=v3))
-    return out, scores
 
 
 def score_detections(

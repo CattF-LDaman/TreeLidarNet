@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 
 from treelidarnet.explorer.combine import export_keep_passes, weighted_combo
+from treelidarnet.filter_export_resume import load_scoring_resume
 from treelidarnet.live_export import detections_to_rows, write_live_predictions, write_status
 from treelidarnet.models.crop_verifier import load_crop_verifier
 from treelidarnet.paths import exports_dir, repo_root
@@ -69,7 +70,9 @@ def filter_export_live(
     radius_m: float = 8.0,
     limit: int | None = None,
     batch_size: int = 48,
-    live_flush_every: int = 96,
+    infer_batch_size: int = 64,
+    live_flush_every: int = 512,
+    resume: bool = True,
     live_dir: Path | None = None,
     require_chip_rgb: bool = False,
     verifier_checkpoint_v2: Path | None = None,
@@ -169,56 +172,91 @@ def filter_export_live(
             input=str(in_path),
         )
 
-    print(f"  live map: poll /api/live/verified (server) or {pred_path.parent}", flush=True)
+    print(
+        f"  live map: poll /api/live/verified (server) or {pred_path.parent} "
+        f"(batched infer_batch_size={infer_batch_size})",
+        flush=True,
+    )
 
+    resume_done = 0
     scored_all: list[Detection] = []
     dual_scores: list[dict[str, float]] | None = [] if compare else None
-    last_flush = 0
-    for start in range(0, len(preds), batch_size):
-        batch = preds[start : start + batch_size]
+    if resume:
+        resume_done, prefix_scored, prefix_dual = load_scoring_resume(
+            status_path=status_path,
+            live_pred_path=pred_path,
+            preds=preds,
+            compare=compare,
+        )
+        scored_all = prefix_scored
+        if compare and dual_scores is not None and prefix_dual is not None:
+            dual_scores = list(prefix_dual)
+
+    remaining = preds[resume_done:]
+    last_flush = resume_done
+
+    def _maybe_flush(global_done: int) -> None:
+        nonlocal last_flush
+        if global_done - last_flush < live_flush_every and global_done < len(preds):
+            return
+        write_live_predictions(
+            pred_path,
+            scored_all,
+            verifier_scores_list=dual_scores,
+        )
+        status_extra: dict = {}
+        if compare:
+            status_extra["compare"] = True
+        write_status(
+            status_path,
+            phase="scoring",
+            done=global_done,
+            total=len(preds),
+            scored=global_done,
+            bev_min=bev_min,
+            verifier_threshold=verifier_threshold,
+            infer_batch_size=infer_batch_size,
+            **status_extra,
+        )
+        print(f"  live flush {global_done}/{len(preds)}", flush=True)
+        last_flush = global_done
+
+    if remaining:
+        if resume_done:
+            print(f"  scoring remaining {len(remaining)} (resume from {resume_done})", flush=True)
+        _ = batch_size  # legacy alias; scoring is no longer sliced by batch_size
+
+        def on_progress(done_chunk: int, _chunk_total: int) -> None:
+            _maybe_flush(resume_done + done_chunk)
+
         if compare and model_v2 is not None and model_v3 is not None and dual_scores is not None:
-            scored, batch_scores = score_detections_dual(
-                batch,
+            scored_new, dual_new = score_detections_dual(
+                remaining,
                 model_v2,
                 model_v3,
                 device=device,
                 radius_m=radius_m,
-                progress_base=start,
+                progress_base=resume_done,
+                infer_batch_size=infer_batch_size,
+                on_progress=on_progress,
             )
-            scored_all.extend(scored)
-            dual_scores.extend(batch_scores)
+            scored_all.extend(scored_new)
+            dual_scores.extend(dual_new)
         else:
             assert model_v3 is not None
-            scored = score_detections_with_model(
-                batch,
+            scored_new = score_detections_with_model(
+                remaining,
                 model_v3,
                 device=device,
                 radius_m=radius_m,
-                progress_base=start,
+                progress_base=resume_done,
+                infer_batch_size=infer_batch_size,
+                on_progress=on_progress,
             )
-            scored_all.extend(scored)
-        done = len(scored_all)
-        if done - last_flush >= live_flush_every or done >= len(preds):
-            write_live_predictions(
-                pred_path,
-                scored_all,
-                verifier_scores_list=dual_scores,
-            )
-            status_extra: dict = {}
-            if compare:
-                status_extra["compare"] = True
-            write_status(
-                status_path,
-                phase="scoring",
-                done=done,
-                total=len(preds),
-                scored=done,
-                bev_min=bev_min,
-                verifier_threshold=verifier_threshold,
-                **status_extra,
-            )
-            print(f"  live flush {done}/{len(preds)}", flush=True)
-            last_flush = done
+            scored_all.extend(scored_new)
+        _maybe_flush(len(preds))
+    elif resume_done and scored_all:
+        print(f"  scoring complete from resume ({len(scored_all)} detections)", flush=True)
 
     discovery_in = reg_in = discovery_kept = reg_kept = 0
     kept: list[Detection] = []

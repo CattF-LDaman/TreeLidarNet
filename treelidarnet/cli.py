@@ -357,6 +357,8 @@ def _cmd_filter_export(args: argparse.Namespace) -> int:
         combine_mode=str(args.combine_mode),
         w_v2=float(args.w_v2),
         w_v3=float(args.w_v3),
+        infer_batch_size=int(args.infer_batch_size),
+        resume=not bool(args.no_resume),
     )
     if args.live:
         from treelidarnet.filter_export_live import filter_export_live
@@ -721,6 +723,16 @@ def main(argv: list[str] | None = None) -> int:
         "--require-chip-rgb",
         action="store_true",
         help="Only score detections on chips with valid rgb (v3 QA)",
+    )
+    p_filter.add_argument(
+        "--infer-batch-size",
+        default="64",
+        help="GPU batch size for crop verifier forward (live export)",
+    )
+    p_filter.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Do not resume partial scoring from exports/inference/live/",
     )
     p_filter.set_defaults(func=_cmd_filter_export)
 
