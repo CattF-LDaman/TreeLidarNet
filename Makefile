@@ -1,7 +1,9 @@
-.PHONY: sync sync-cpu test lint tensorboard viewer-serve viewer-crop-qa patch-chips-rgb-full help
+.PHONY: sync sync-cpu test lint tensorboard viewer-serve viewer-stop viewer-crop-qa explorer-bundle explorer-serve patch-chips-rgb-full help
+
+VIEWER_PORT ?= 8765
 
 help:
-	@echo "Targets: sync, sync-cpu, test, lint, tensorboard, viewer-crop-qa, patch-chips-rgb-full, filter-export-verifier-full"
+	@echo "Targets: sync, sync-cpu, test, lint, tensorboard, viewer-crop-qa, explorer-bundle, explorer-serve, patch-chips-rgb-full, filter-export-verifier-full"
 
 patch-chips-rgb-full:
 	PYTHONUNBUFFERED=1 uv run treelidarnet data-patch-chips-rgb \
@@ -18,6 +20,20 @@ viewer-crop-qa:
 	uv run treelidarnet serve-crop-qa \
 	  --verifier-v2 runs/gent_crop_verifier_v2/best.pt \
 	  --verifier-v3 runs/gent_crop_verifier_v3_rgb/best.pt
+
+explorer-bundle:
+	PYTHONUNBUFFERED=1 uv run treelidarnet data-build-explorer-bundle
+
+viewer-stop:
+	@PID=$$(ss -H -tlnp 'sport = :$(VIEWER_PORT)' 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1); \
+	if [ -n "$$PID" ]; then \
+	  echo "Stopping process $$PID on port $(VIEWER_PORT)"; \
+	  kill $$PID 2>/dev/null || true; \
+	  sleep 0.4; \
+	fi
+
+explorer-serve: viewer-stop
+	uv run treelidarnet serve-explorer --port $(VIEWER_PORT)
 
 infer-gent-full:
 	PYTHONUNBUFFERED=1 uv run treelidarnet infer-gent \
@@ -48,6 +64,7 @@ filter-export-live-compare:
 	  --output exports/inference/gent_city_gent_canopy_v2_verified_v2_v3.json.gz \
 	  --verifier-v2 runs/gent_crop_verifier_v2/best.pt \
 	  --verifier-v3 runs/gent_crop_verifier_v3_rgb/best.pt \
+	  --combine-mode weighted --verifier-threshold 0.45 \
 	  --bev-min 0.85 --limit 25000
 
 filter-export-verifier-full:
@@ -56,6 +73,7 @@ filter-export-verifier-full:
 	  --output exports/inference/gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz \
 	  --verifier-v2 runs/gent_crop_verifier_v2/best.pt \
 	  --verifier-v3 runs/gent_crop_verifier_v3_rgb/best.pt \
+	  --combine-mode weighted --verifier-threshold 0.45 \
 	  --bev-min 0.85
 
 sync:

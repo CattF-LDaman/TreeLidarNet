@@ -52,7 +52,9 @@ uv run treelidarnet train --config configs/gent_bev_v1.yaml
 # DHMV RGB for verifier only (BEV still 4 ch): data-patch-chips-rgb [--all-chips] [--only-missing-rgb] [--register-chips] [--offset N]
 # Before v3_rgb train: --register-chips --only-missing-rgb --refresh-missing-manifest --jobs 1
 # uv run treelidarnet train-crop --config configs/gent_crop_verifier_v3_rgb.yaml
-# uv run treelidarnet filter-export --input exports/...json.gz --output ... --verifier runs/gent_crop_verifier/best.pt
+# Dual verifier export (default): weighted 0.5*v2+0.5*v3 >= 0.45 after bev-min (see make filter-export-verifier-full)
+# uv run treelidarnet filter-export --live --verifier-v2 runs/gent_crop_verifier_v2/best.pt --verifier-v3 runs/gent_crop_verifier_v3_rgb/best.pt ...
+# Single-verifier: --verifier runs/.../best.pt --combine-mode v3_only
 # uv run treelidarnet infer-gent --verifier runs/gent_crop_verifier/best.pt --verifier-threshold 0.5
 
 # Checkpoints: `runs/<run_name>/latest.pt` (every 500 steps + each epoch + on Ctrl+C),
@@ -97,6 +99,30 @@ Crop QA (register + model rings → WebGPU point cloud):
 ```bash
 make viewer-crop-qa
 # http://127.0.0.1:8765/viewer/crops.html
+```
+
+End-product explorer (full dual-scored export, columnar bundle):
+
+```bash
+make explorer-bundle   # after filter-export-verifier-full (or live verified_predictions.json)
+make explorer-serve    # stops any server already on 8765 (e.g. viewer-crop-qa)
+# http://127.0.0.1:8765/explorer
+```
+
+Map and score bars use **precomputed** BEV + v2 + v3 from the bundle (no GPU verifier). Clicks only fetch LiDAR points. Optional: `serve-explorer --rescore-on-click`.
+
+**False-positive flags (verifier retrain):** In the dock, select a detection → **Mark false positive** (or press `f`). Flags persist to `data/manifests/explorer_qa_flags.parquet`. Optional **Hide flagged** hides those peaks on the map.
+
+```bash
+# After QA flagging in the explorer:
+uv run treelidarnet data-build-crop-index   # adds label=0 source=explorer_fp rows when flags exist
+# optional explicit path:
+# uv run treelidarnet data-build-crop-index --qa-flags data/manifests/explorer_qa_flags.parquet
+# then retrain (fine-tunes from prior best.pt with explorer_fp loss×15 + sample×10):
+# uv run treelidarnet train-crop --config configs/gent_crop_verifier_v1.yaml --run-name gent_crop_verifier_v2_fp
+# uv run treelidarnet train-crop --config configs/gent_crop_verifier_v3_rgb.yaml --run-name gent_crop_verifier_v3_rgb_fp
+# Compare flags after training:
+# uv run treelidarnet eval-explorer-flags   # → exports/qa/explorer_fp_rescore.parquet
 ```
 
 Needs `data/manifests/gent_trees.parquet` and chip `.npz` files. Optional: city export path in the map toolbar (default `exports/inference/gent_city_gent_canopy_v2.json.gz`).

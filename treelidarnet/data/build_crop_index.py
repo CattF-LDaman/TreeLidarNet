@@ -47,12 +47,56 @@ def _split_for_tree(
     return _split_bucket(gis_id)
 
 
+def _append_explorer_fp_rows(
+    rows: list[dict],
+    *,
+    qa_flags_path: Path,
+    chip_point_count: dict[str, int],
+    min_chip_points: int = 32,
+) -> int:
+    if not qa_flags_path.is_file():
+        return 0
+    flags = pd.read_parquet(qa_flags_path)
+    if flags.empty or "active" not in flags.columns:
+        return 0
+    flags = flags.loc[flags["active"].astype(bool)]
+    added = 0
+    for r in flags.to_dict("records"):
+        gx, gy = float(r["x"]), float(r["y"])
+        x0, y0 = chip_origin_for_point(gx, gy)
+        cid = chip_id(x0, y0)
+        pc = chip_point_count.get(cid)
+        if pc is not None and pc < min_chip_points:
+            continue
+        chip_path = chips_dir() / f"{cid}.npz"
+        if not chip_path.is_file():
+            continue
+        lx, ly = global_to_chip_local(gx, gy, origin_x=x0, origin_y=y0)
+        fid = str(r["flag_id"])
+        rows.append(
+            crop_row_meta(
+                crop_id=fid,
+                label=0,
+                source="explorer_fp",
+                chip_id_value=cid,
+                center_x=lx,
+                center_y=ly,
+                split=_split_bucket(fid),
+                origin_x=x0,
+                origin_y=y0,
+            )
+        )
+        added += 1
+    return added
+
+
 def build_crop_index(
     *,
     trees_parquet: Path,
     chips_index: Path | None = None,
     out_path: Path | None = None,
     split_meta_path: Path | None = None,
+    qa_flags_path: Path | None = None,
     positives_only: bool = False,
     grb_negatives_per_chip: int = 2,
     grb_max_chips: int = 15_000,
@@ -158,6 +202,14 @@ def build_crop_index(
 
     if limit is not None:
         rows = rows[:limit]
+
+    default_qa = manifests_dir() / "explorer_qa_flags.parquet"
+    qa_path = qa_flags_path if qa_flags_path is not None else default_qa
+    fp_added = _append_explorer_fp_rows(
+        rows, qa_flags_path=qa_path, chip_point_count=chip_point_count
+    )
+    if fp_added:
+        print(f"  explorer_fp: {fp_added} QA false-positive rows", flush=True)
 
     df = pd.DataFrame(rows)
     out_path.parent.mkdir(parents=True, exist_ok=True)

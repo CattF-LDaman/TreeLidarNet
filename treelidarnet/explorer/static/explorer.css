@@ -1,0 +1,83 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; width: 100%; overflow: hidden; }
+body {
+  background: #0d1117; color: #e6edf3; font-family: system-ui, sans-serif;
+  display: flex; flex-direction: column;
+}
+#layout { flex: 1; display: flex; min-height: 0; width: 100%; }
+#map-pane { flex: 1 1 58%; min-width: 0; position: relative; min-height: 0; }
+#explorer-map { position: absolute; inset: 0; }
+#dock {
+  flex: 0 0 42%; max-width: 520px; min-width: 300px;
+  border-left: 1px solid #30363d; display: flex; flex-direction: column; background: #010409;
+}
+#crop-canvas { flex: 1; min-height: 220px; width: 100%; display: block; touch-action: none; }
+.panel {
+  padding: 0.75rem 1rem; font-size: 0.78rem; line-height: 1.45;
+  border-bottom: 1px solid #30363d; background: rgba(13,17,23,0.95);
+}
+.glass {
+  position: absolute; z-index: 2; top: 0.75rem; left: 0.75rem;
+  background: rgba(13,17,23,0.92); padding: 0.65rem 0.8rem; border-radius: 0.5rem;
+  border: 1px solid #30363d; font-size: 0.72rem; max-width: 19rem; max-height: calc(100% - 2rem); overflow-y: auto;
+}
+.glass h1 { font-size: 0.95rem; margin: 0 0 0.35rem; color: #7ee787; }
+.meta { color: #8b949e; margin-top: 0.35rem; }
+label { display: block; margin: 0.35rem 0; font-size: 0.72rem; }
+input[type="range"], select { width: 100%; margin-top: 0.2rem; }
+select {
+  padding: 0.2rem; background: #161b22; color: #e6edf3;
+  border: 1px solid #30363d; border-radius: 4px;
+}
+.score-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.45rem; font-size: 0.72rem; }
+.score-row span { width: 5.5rem; color: #8b949e; flex-shrink: 0; }
+.bar { flex: 1; height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 4px; transition: width 0.2s; }
+.bar-bev i { background: linear-gradient(90deg, #b45309, #fbbf24); }
+.bar-ver i { background: linear-gradient(90deg, #f87171, #34d399); }
+#map-tip {
+  display: none; position: fixed; z-index: 5; pointer-events: none;
+  padding: 0.45rem 0.6rem; font-size: 0.72rem; border-radius: 6px;
+  background: rgba(13,17,23,0.95); border: 1px solid #30363d; max-width: 14rem;
+}
+.fab {
+  position: absolute; z-index: 3; top: 0.75rem; right: 0.75rem;
+  padding: 0.45rem 0.75rem; border-radius: 0.5rem; cursor: pointer;
+  background: rgba(35, 134, 54, 0.92); color: #f0fff4; border: 1px solid #3fb950;
+  font-size: 0.75rem; font-weight: 600;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+.fab:hover { background: rgba(46, 160, 67, 0.95); }
+.popout {
+  display: none; position: absolute; z-index: 4; top: 3.25rem; right: 0.75rem;
+  width: min(18.5rem, calc(100% - 1.5rem)); max-height: calc(100% - 4rem);
+  overflow-y: auto; padding: 0.65rem 0.8rem; border-radius: 0.5rem;
+  background: rgba(13, 17, 23, 0.96); border: 1px solid #30363d;
+  font-size: 0.72rem; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+.popout.open { display: block; }
+.popout-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 0.45rem; color: #7ee787;
+}
+.popout-close {
+  background: transparent; border: none; color: #8b949e; font-size: 1.25rem;
+  cursor: pointer; line-height: 1; padding: 0 0.2rem;
+}
+.popout-close:hover { color: #e6edf3; }
+.swatch-row {
+  display: flex; align-items: center; gap: 0.45rem; margin: 0.35rem 0 0.5rem;
+  font-size: 0.65rem; color: #8b949e;
+}
+.swatch {
+  width: 2rem; height: 1rem; border-radius: 4px; border: 1px solid #30363d;
+}
+.flag-actions { margin-top: 0.6rem; padding-top: 0.5rem; border-top: 1px solid #30363d; }
+.flag-btns { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.35rem; }
+.flag-btns button {
+  flex: 1; min-width: 7rem; padding: 0.35rem 0.5rem; font-size: 0.7rem; cursor: pointer;
+  background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px;
+}
+.flag-btns button:hover:not(:disabled) { border-color: #f85149; color: #fecaca; }
+.flag-btns button:disabled { opacity: 0.45; cursor: not-allowed; }
+#btn-unflag:hover:not(:disabled) { border-color: #3fb950; color: #7ee787; }

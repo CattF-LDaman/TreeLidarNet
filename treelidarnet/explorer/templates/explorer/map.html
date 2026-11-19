@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TreeLidarNet — End-product explorer</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='explorer.css') }}">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.webgpu.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="layout">
+    <div id="map-pane">
+      <div id="explorer-map"></div>
+      <div id="map-tip"></div>
+      <div id="toolbar" class="glass">
+        <h1>End-product QA</h1>
+        <div id="load-status" class="meta">Loading bundle…</div>
+        <section>
+          <label>BEV floor <span id="bev-label">0.85</span>
+            <input type="range" id="bev-min" min="0.2" max="0.99" step="0.01" value="0.85">
+          </label>
+          <label>Combine mode
+            <select id="combine-mode">
+              <option value="either_or" selected>Either v2 OR v3</option>
+              <option value="both_and">Both AND</option>
+              <option value="v2_only">v2 only</option>
+              <option value="v3_only">v3 only</option>
+              <option value="max_score">max(v2,v3)</option>
+              <option value="min_score">min(v2,v3)</option>
+              <option value="weighted">Weighted blend</option>
+              <option value="register_split">Register split (5 m)</option>
+              <option value="disagreement">v2/v3 disagreement</option>
+            </select>
+          </label>
+          <label>v2 ≥ <span id="tv2-label">0.50</span>
+            <input type="range" id="t-v2" min="0" max="1" step="0.01" value="0.50">
+          </label>
+          <label>v3 ≥ <span id="tv3-label">0.50</span>
+            <input type="range" id="t-v3" min="0" max="1" step="0.01" value="0.50">
+          </label>
+          <label>Combo t ≥ <span id="tcombo-label">0.50</span>
+            <input type="range" id="t-combo" min="0" max="1" step="0.01" value="0.50">
+          </label>
+          <label><input type="checkbox" id="discoveries-only"> Discoveries only</label>
+          <label id="discovery-wrap" style="display:none">Min register dist <span id="disc-label">2.0</span> m
+            <input type="range" id="discovery-min" min="1" max="20" step="0.5" value="2">
+          </label>
+          <label><input type="checkbox" id="require-rgb"> Require RGB chip</label>
+          <label><input type="checkbox" id="show-register" checked> Register</label>
+          <label><input type="checkbox" id="hide-flagged"> Hide flagged false positives</label>
+        </section>
+        <div id="visible-count" class="meta">—</div>
+      </div>
+      <button type="button" id="style-panel-toggle" class="fab" title="Detection style">Style</button>
+      <div id="style-popout" class="popout" aria-label="Detection style">
+        <div class="popout-head">
+          <strong>Detection style</strong>
+          <button type="button" id="style-popout-close" class="popout-close">×</button>
+        </div>
+        <label>Representation
+          <select id="style-repr">
+            <option value="ring" selected>Amber rings (stroke)</option>
+            <option value="filled">Filled discs</option>
+            <option value="halo_v3">Disc + ring</option>
+            <option value="compare_halos">Compare halos (v2 outer, v3 inner)</option>
+          </select>
+        </label>
+        <label>Color by score
+          <select id="style-color-field">
+            <option value="v3">Verifier v3 (RGB)</option>
+            <option value="v2">Verifier v2 (LiDAR)</option>
+            <option value="bev">BEV detector</option>
+            <option value="max_v">max(v2, v3)</option>
+            <option value="min_v">min(v2, v3)</option>
+            <option value="blend">½ v2 + ½ v3</option>
+            <option value="disagree">|v2 − v3|</option>
+          </select>
+        </label>
+        <label>Size by
+          <select id="style-size-field">
+            <option value="none" selected>Fixed radius</option>
+            <option value="bev">BEV</option>
+            <option value="v2">v2</option>
+            <option value="v3">v3</option>
+            <option value="max_v">max(v2, v3)</option>
+          </select>
+        </label>
+        <label>Base radius (m) <span id="style-base-radius-label">5.5</span>
+          <input type="range" id="style-base-radius" min="2" max="14" step="0.25" value="5.5">
+        </label>
+        <label>Score size boost (m) <span id="style-size-boost-label">4</span>
+          <input type="range" id="style-size-boost" min="0" max="12" step="0.25" value="4">
+        </label>
+        <label>Ring width (px) <span id="style-line-width-label">3</span>
+          <input type="range" id="style-line-width" min="1" max="8" step="0.5" value="3">
+        </label>
+        <label>Opacity <span id="style-opacity-label">0.88</span>
+          <input type="range" id="style-opacity" min="0.15" max="1" step="0.01" value="0.88">
+        </label>
+        <label>Low score hue <span id="style-hue-low-label">8</span>°
+          <input type="range" id="style-hue-low" min="0" max="360" step="1" value="8">
+        </label>
+        <label>High score hue <span id="style-hue-high-label">145</span>°
+          <input type="range" id="style-hue-high" min="0" max="360" step="1" value="145">
+        </label>
+        <div class="swatch-row">
+          <span id="style-swatch-low" class="swatch"></span>
+          <span class="swatch-arrow">low → high</span>
+          <span id="style-swatch-high" class="swatch"></span>
+        </div>
+        <label>Color saturation <span id="style-sat-label">0.82</span>
+          <input type="range" id="style-sat" min="0.1" max="1" step="0.02" value="0.82">
+        </label>
+        <label><input type="checkbox" id="style-heatmap"> Heatmap at low zoom (replaces rings)</label>
+      </div>
+    </div>
+    <div id="dock">
+      <div class="panel">
+        <div id="sel-meta">Click a ring on the map. Drag in this panel to orbit the crop (Z-up).</div>
+        <div class="score-row"><span>BEV</span><div class="bar bar-bev"><i id="bar-bev"></i></div></div>
+        <div class="score-row"><span>v2</span><div class="bar bar-ver"><i id="bar-v2"></i></div></div>
+        <div class="score-row"><span>v3</span><div class="bar bar-ver"><i id="bar-v3"></i></div></div>
+        <div class="flag-actions">
+          <label>Reason
+            <select id="flag-reason">
+              <option value="default">Default</option>
+              <option value="road">Road / pavement</option>
+              <option value="shrub">Shrub / hedge</option>
+              <option value="duplicate">Duplicate peak</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <input type="text" id="flag-note" placeholder="Short note (optional)" style="width:100%;margin:0.35rem 0">
+          <div class="flag-btns">
+            <button type="button" id="btn-flag-fp" disabled>Mark false positive (F)</button>
+            <button type="button" id="btn-unflag" disabled>Unflag</button>
+          </div>
+          <div id="flag-status" class="meta"></div>
+        </div>
+      </div>
+      <canvas id="crop-canvas"></canvas>
+      <div id="gpu-status" class="panel"></div>
+    </div>
+  </div>
+  <script>
+    window.__explorerRescoreOnClick = {% if rescore_on_click %}true{% else %}false{% endif %};
+  </script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/deck.gl@9.2.7/dist.min.js"></script>
+  <script src="{{ url_for('static', filename='verifier_combine.js') }}"></script>
+  <script src="{{ url_for('static', filename='explorer_style.js') }}"></script>
+  <script src="{{ url_for('static', filename='explorer_flags.js') }}"></script>
+  <script src="{{ url_for('static', filename='explorer_data.js') }}"></script>
+  <script src="{{ url_for('static', filename='explorer_detail.js') }}"></script>
+  <script src="{{ url_for('static', filename='explorer_map.js') }}"></script>
+  <script src="{{ url_for('static', filename='explorer_ui.js') }}"></script>
+  <script src="{{ url_for('static', filename='explorer_style_ui.js') }}"></script>
+</body>
+</html>

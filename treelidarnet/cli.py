@@ -34,12 +34,15 @@ from treelidarnet.data.split import (
 from treelidarnet.eval import eval_detections, load_ground_truths
 from treelidarnet.infer import infer_chip
 from treelidarnet.infer_city import infer_gent_city
-from treelidarnet.paths import manifests_dir, repo_root
+from treelidarnet.paths import exports_dir, manifests_dir, repo_root
 from treelidarnet.qa_center import compare_center_checkpoints, promote_or_revert
 from treelidarnet.data.build_crop_index import build_crop_index
 from treelidarnet.train import train_from_config
 from treelidarnet.train_crop import train_crop_from_config
 from treelidarnet.crop_qa_server import serve_crop_qa
+from treelidarnet.explorer.app import serve_explorer
+from treelidarnet.explorer.bundle import cli_build_bundle
+from treelidarnet.explorer.eval_flags import eval_explorer_flags, print_flag_eval_report
 from treelidarnet.verify_export import filter_export
 
 
@@ -238,6 +241,22 @@ def _cmd_train(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_eval_explorer_flags(args: argparse.Namespace) -> int:
+    out = Path(args.out) if args.out else exports_dir() / "qa" / "explorer_fp_rescore.parquet"
+    df, summary = eval_explorer_flags(
+        flags_path=Path(args.flags) if args.flags else None,
+        v2_baseline=Path(args.verifier_v2_baseline) if args.verifier_v2_baseline else None,
+        v2_fp=Path(args.verifier_v2_fp) if args.verifier_v2_fp else None,
+        v3_baseline=Path(args.verifier_v3_baseline) if args.verifier_v3_baseline else None,
+        v3_fp=Path(args.verifier_v3_fp) if args.verifier_v3_fp else None,
+        threshold=float(args.threshold),
+        out_parquet=out,
+    )
+    print_flag_eval_report(summary, df)
+    print(f"Wrote {out}", flush=True)
+    return 0
+
+
 def _cmd_train_crop(args: argparse.Namespace) -> int:
     ckpt = train_crop_from_config(
         Path(args.config),
@@ -250,16 +269,54 @@ def _cmd_train_crop(args: argparse.Namespace) -> int:
 
 def _cmd_data_build_crop_index(args: argparse.Namespace) -> int:
     chips_index = Path(args.chips_index) if args.chips_index else None
+    qa_flags = Path(args.qa_flags) if args.qa_flags else None
     build_crop_index(
         trees_parquet=Path(args.trees),
         chips_index=chips_index,
         out_path=Path(args.out),
         split_meta_path=Path(args.split_meta) if args.split_meta else None,
+        qa_flags_path=qa_flags,
         positives_only=bool(args.positives_only),
         grb_negatives_per_chip=int(args.grb_per_chip),
         grb_max_chips=int(args.grb_max_chips),
         limit=int(args.limit) if args.limit else None,
         seed=int(args.seed),
+    )
+    return 0
+
+
+def _cmd_data_build_explorer_bundle(args: argparse.Namespace) -> int:
+    cli_build_bundle(
+        input_path=Path(args.input) if args.input else None,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+        trees_parquet=Path(args.trees) if args.trees else None,
+        mark_rgb=bool(args.mark_rgb),
+    )
+    return 0
+
+
+def _cmd_serve_explorer(args: argparse.Namespace) -> int:
+    from treelidarnet.paths import exports_dir, manifests_dir
+    from treelidarnet.qa.crop_service import CropQAServerConfig
+
+    trees_parquet = Path(args.trees) if args.trees else manifests_dir() / "gent_trees.parquet"
+    predictions = Path(args.predictions) if args.predictions else None
+    bundle_dir = Path(args.bundle_dir) if args.bundle_dir else exports_dir() / "inference" / "explorer"
+    rescore = bool(args.rescore_on_click)
+    cfg = CropQAServerConfig(
+        trees_parquet=trees_parquet,
+        predictions_export=predictions or (exports_dir() / "inference" / "gent_city_gent_canopy_v2.json.gz"),
+        verifier_v2=Path(args.verifier_v2) if args.verifier_v2 else (repo_root() / "runs/gent_crop_verifier_v2/best.pt" if rescore else None),
+        verifier_v3=Path(args.verifier_v3) if args.verifier_v3 else (repo_root() / "runs/gent_crop_verifier_v3_rgb/best.pt" if rescore else None),
+        radius_m=float(args.radius_m),
+        num_points=int(args.num_points),
+    )
+    serve_explorer(
+        host=args.host,
+        port=int(args.port),
+        crop_cfg=cfg,
+        bundle_dir=bundle_dir,
+        rescore_on_click=rescore,
     )
     return 0
 
@@ -297,6 +354,9 @@ def _cmd_filter_export(args: argparse.Namespace) -> int:
         require_chip_rgb=bool(args.require_chip_rgb),
         verifier_checkpoint_v2=Path(args.verifier_v2) if args.verifier_v2 else None,
         verifier_checkpoint_v3=Path(args.verifier_v3) if args.verifier_v3 else None,
+        combine_mode=str(args.combine_mode),
+        w_v2=float(args.w_v2),
+        w_v3=float(args.w_v3),
     )
     if args.live:
         from treelidarnet.filter_export_live import filter_export_live
@@ -594,6 +654,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_crop_idx.add_argument("--out", default=str(manifests_dir() / "crops_index.parquet"))
     p_crop_idx.add_argument("--split-meta", default=None)
+    p_crop_idx.add_argument(
+        "--qa-flags",
+        default=None,
+        help="Explorer FP flags parquet (default data/manifests/explorer_qa_flags.parquet if exists)",
+    )
     p_crop_idx.add_argument("--positives-only", action="store_true")
     p_crop_idx.add_argument("--grb-per-chip", default="2")
     p_crop_idx.add_argument(
@@ -626,7 +691,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_filter.add_argument("--verifier-v3", default=None, help="RGB verifier checkpoint")
     p_filter.add_argument("--trees", default=str(manifests_dir() / "gent_trees.parquet"))
-    p_filter.add_argument("--verifier-threshold", default="0.5")
+    p_filter.add_argument(
+        "--verifier-threshold",
+        default="0.45",
+        help="Single-verifier cut, or combo-t for --combine-mode weighted (default 0.45)",
+    )
+    p_filter.add_argument(
+        "--combine-mode",
+        default="weighted",
+        help="Dual export keep rule: weighted, v3_only, either_or, … (explorer-aligned)",
+    )
+    p_filter.add_argument("--w-v2", default="0.5", help="Weight for v2 in weighted combine")
+    p_filter.add_argument("--w-v3", default="0.5", help="Weight for v3 in weighted combine")
     p_filter.add_argument("--discovery-m", default="5.0")
     p_filter.add_argument("--register-m", default="3.0")
     p_filter.add_argument("--radius-m", default="8.0")
@@ -727,6 +803,40 @@ def main(argv: list[str] | None = None) -> int:
     p_city.add_argument("--verifier-radius-m", default="8.0")
     p_city.set_defaults(func=_cmd_infer_gent)
 
+    p_exp_bundle = sub.add_parser(
+        "data-build-explorer-bundle",
+        help="Columnar explorer bundle from dual-scored export",
+    )
+    p_exp_bundle.add_argument("--input", default=None, help="verified .json.gz or live verified_predictions.json")
+    p_exp_bundle.add_argument("--output-dir", default=None, help="default exports/inference/explorer")
+    p_exp_bundle.add_argument("--trees", default=None)
+    p_exp_bundle.add_argument(
+        "--mark-rgb",
+        action="store_true",
+        help="Slow: set has_rgb per detection from chip npz",
+    )
+    p_exp_bundle.set_defaults(func=_cmd_data_build_explorer_bundle)
+
+    p_exp = sub.add_parser(
+        "serve-explorer",
+        help="Flask end-product QA map + crop API (localhost)",
+    )
+    p_exp.add_argument("--host", default="127.0.0.1")
+    p_exp.add_argument("--port", default="8765")
+    p_exp.add_argument("--trees", default=None)
+    p_exp.add_argument("--predictions", default=None)
+    p_exp.add_argument("--bundle-dir", default=None)
+    p_exp.add_argument("--verifier-v2", default=None)
+    p_exp.add_argument("--verifier-v3", default=None)
+    p_exp.add_argument(
+        "--rescore-on-click",
+        action="store_true",
+        help="Re-run v2/v3 verifier on crop click (default: use export scores only)",
+    )
+    p_exp.add_argument("--radius-m", default="8.0")
+    p_exp.add_argument("--num-points", default="512")
+    p_exp.set_defaults(func=_cmd_serve_explorer)
+
     p_crop_qa = sub.add_parser(
         "serve-crop-qa",
         help="Crop JSON API + Deck.GL / WebGPU viewer (localhost)",
@@ -753,6 +863,38 @@ def main(argv: list[str] | None = None) -> int:
     p_crop_qa.add_argument("--radius-m", default="8.0")
     p_crop_qa.add_argument("--num-points", default="512")
     p_crop_qa.set_defaults(func=_cmd_serve_crop_qa)
+
+    p_flag_eval = sub.add_parser(
+        "eval-explorer-flags",
+        help="Rescore QA false-positive flags: baseline vs FP fine-tuned verifiers",
+    )
+    p_flag_eval.add_argument(
+        "--flags",
+        default=str(manifests_dir() / "explorer_qa_flags.parquet"),
+    )
+    p_flag_eval.add_argument(
+        "--verifier-v2-baseline",
+        default=str(repo_root() / "runs/gent_crop_verifier_v2/best.pt"),
+    )
+    p_flag_eval.add_argument(
+        "--verifier-v2-fp",
+        default=str(repo_root() / "runs/gent_crop_verifier_v2_fp/best.pt"),
+    )
+    p_flag_eval.add_argument(
+        "--verifier-v3-baseline",
+        default=str(repo_root() / "runs/gent_crop_verifier_v3_rgb/best.pt"),
+    )
+    p_flag_eval.add_argument(
+        "--verifier-v3-fp",
+        default=str(repo_root() / "runs/gent_crop_verifier_v3_rgb_fp/best.pt"),
+    )
+    p_flag_eval.add_argument("--threshold", default="0.5")
+    p_flag_eval.add_argument(
+        "--out",
+        default=None,
+        help="Parquet with per-flag scores (default exports/qa/explorer_fp_rescore.parquet)",
+    )
+    p_flag_eval.set_defaults(func=_cmd_eval_explorer_flags)
 
     p_qa = sub.add_parser(
         "qa-checkpoint-center",

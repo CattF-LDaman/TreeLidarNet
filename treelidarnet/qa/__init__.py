@@ -1,0 +1,1 @@
+"""QA services (crop extraction, verifier scoring)."""

@@ -57,7 +57,9 @@ def detection_row(
     }
     if verifier_scores:
         row["verifier_scores"] = verifier_scores
-        primary = verifier_scores.get("v3")
+        primary = verifier_scores.get("combo")
+        if primary is None:
+            primary = verifier_scores.get("v3")
         if primary is None:
             primary = verifier_scores.get("v2")
         if primary is not None:

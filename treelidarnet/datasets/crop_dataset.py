@@ -24,11 +24,15 @@ class CropDataset(Dataset):
         min_points: int = 32,
         seed: int = 42,
         in_channels: int = IN_CHANNELS,
+        explorer_fp_loss_weight: float = 1.0,
+        explorer_fp_sample_weight: float = 1.0,
     ) -> None:
         df = pd.read_parquet(manifest_path)
         if split is not None:
             df = df[df["split"] == split]
         self.rows = df.to_dict("records")
+        self._explorer_fp_loss_weight = float(explorer_fp_loss_weight)
+        self._explorer_fp_sample_weight = float(explorer_fp_sample_weight)
         self.radius_m = radius_m
         self.num_points = num_points
         self.min_points = min_points
@@ -55,11 +59,25 @@ class CropDataset(Dataset):
         )
         if crop is None:
             return None
+        src = str(row.get("source") or "")
+        is_fp = src == "explorer_fp"
+        loss_w = self._explorer_fp_loss_weight if is_fp else 1.0
         return {
             "points": torch.from_numpy(crop),
             "label": torch.tensor(float(row["label"]), dtype=torch.float32),
             "crop_id": row["crop_id"],
+            "loss_weight": torch.tensor(loss_w, dtype=torch.float32),
         }
+
+    def sample_weights(self) -> torch.Tensor:
+        """Per-index weights for WeightedRandomSampler (train only)."""
+        out: list[float] = []
+        for row in self.rows:
+            src = str(row.get("source") or "")
+            out.append(
+                self._explorer_fp_sample_weight if src == "explorer_fp" else 1.0
+            )
+        return torch.tensor(out, dtype=torch.double)
 
 
 def collate_crops(batch: list[dict | None]) -> dict[str, torch.Tensor | list[str]] | None:
@@ -69,6 +87,7 @@ def collate_crops(batch: list[dict | None]) -> dict[str, torch.Tensor | list[str
     return {
         "points": torch.stack([b["points"] for b in batch]),
         "label": torch.stack([b["label"] for b in batch]),
+        "loss_weight": torch.stack([b["loss_weight"] for b in batch]),
         "crop_id": [str(b["crop_id"]) for b in batch],
     }
 

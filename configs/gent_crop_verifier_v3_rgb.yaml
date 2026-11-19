@@ -13,7 +13,10 @@ sa2_radius: 2.0
 sa2_nsample: 64
 batch_size: 32
 num_workers: 4
-epochs: 20
-lr: 0.001
+epochs: 15
+lr: 0.0005
 balance_class_loss: true
 val_threshold: 0.5
+explorer_fp_loss_weight: 15.0
+explorer_fp_sample_weight: 10.0
+resume_from: runs/gent_crop_verifier_v3_rgb/best.pt

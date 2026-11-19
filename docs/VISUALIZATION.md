@@ -142,6 +142,19 @@ Optional integration paths:
 
 ---
 
+## End-product explorer (Flask, full dataset)
+
+**Page:** **http://127.0.0.1:8765/explorer**  
+**Server:** `make explorer-serve` (Flask — crop API + map; preferred after full dual verify)
+
+| Piece | Stack |
+|-------|--------|
+| Data | `make explorer-bundle` → `exports/inference/explorer/` (`detections.bin`, `register.bin`, `meta.json`) |
+| Map | MapLibre + deck.gl; columnar load (no 25k cap); combine presets (v2/v3 OR/AND, register split, discoveries) |
+| Click | Same `/api/crop/wgs84` + Three.js panel as crop QA |
+
+Legacy Starlette crop QA (`make viewer-crop-qa`, [`viewer/crops.html`](../viewer/crops.html)) remains for live polling workflows.
+
 ## Crop QA viewer (register + BEV + verifier → 3D)
 
 **Page:** [`viewer/crops.html`](../viewer/crops.html)  

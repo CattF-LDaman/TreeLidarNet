@@ -43,11 +43,24 @@ export async function mountCropViewer(canvas, { onStatus } = {}) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0d1117);
   const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 500);
+  camera.up.set(0, 0, 1);
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 3;
   controls.maxDistance = 80;
+  controls.screenSpacePanning = false;
+  controls.maxPolarAngle = Math.PI * 0.49;
+  controls.minPolarAngle = 0.12;
+  controls.mouseButtons = {
+    LEFT: THREE.MOUSE.ROTATE,
+    MIDDLE: THREE.MOUSE.DOLLY,
+    RIGHT: THREE.MOUSE.PAN,
+  };
+  controls.touches = {
+    ONE: THREE.TOUCH.ROTATE,
+    TWO: THREE.TOUCH.DOLLY_PAN,
+  };
 
   let points = null;
   let footprint = null;
@@ -169,8 +182,12 @@ export async function mountCropViewer(canvas, { onStatus } = {}) {
     const bs = geom.boundingSphere;
     const r = Math.max(bs.radius, 2);
     const zSpan = zMax - zMin;
-    camera.position.set(r * 1.5, -r * 1.2, Math.max(4, r * 0.8 + zSpan * 0.35));
-    controls.target.set(0, 0, zMin + zSpan * 0.45);
+    const tz = zMin + zSpan * 0.45;
+    const dist = Math.max(r * 2.4, 6);
+    const az = Math.PI * 0.3;
+    controls.target.set(0, 0, tz);
+    camera.position.set(dist * Math.cos(az), dist * Math.sin(az), tz + r * 0.55);
+    camera.up.set(0, 0, 1);
     controls.update();
     render();
   }

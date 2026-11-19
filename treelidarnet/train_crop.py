@@ -9,8 +9,9 @@ from pathlib import Path
 import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import yaml
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from torch.utils.tensorboard import SummaryWriter
 
 from treelidarnet.datasets.crop_dataset import CropDataset, collate_crops, default_crop_manifest
@@ -134,6 +135,14 @@ def train_crop_from_config(
     num_workers = int(cfg.get("num_workers", 4))
     val_threshold = float(cfg.get("val_threshold", 0.5))
     balance_class_loss = bool(cfg.get("balance_class_loss", True))
+    explorer_fp_loss_weight = float(cfg.get("explorer_fp_loss_weight", 1.0))
+    explorer_fp_sample_weight = float(cfg.get("explorer_fp_sample_weight", 1.0))
+    resume_from = cfg.get("resume_from")
+    resume_path = None
+    if resume_from:
+        resume_path = Path(resume_from)
+        if not resume_path.is_absolute():
+            resume_path = repo_root() / resume_path
 
     arch = {
         "in_channels": int(cfg.get("in_channels", 6)),
@@ -153,6 +162,8 @@ def train_crop_from_config(
         num_points=num_points,
         min_points=min_points,
         in_channels=in_channels,
+        explorer_fp_loss_weight=explorer_fp_loss_weight,
+        explorer_fp_sample_weight=explorer_fp_sample_weight,
     )
     val_ds = CropDataset(
         manifest,
@@ -162,6 +173,8 @@ def train_crop_from_config(
         min_points=min_points,
         seed=0,
         in_channels=in_channels,
+        explorer_fp_loss_weight=1.0,
+        explorer_fp_sample_weight=1.0,
     )
     if len(val_ds) == 0:
         val_ds = CropDataset(
@@ -179,10 +192,32 @@ def train_crop_from_config(
     val_pos, val_neg = _manifest_class_counts(manifest, "val")
     print(f"Val manifest: {val_pos} pos, {val_neg} neg", flush=True)
 
+    train_df = pd.read_parquet(manifest)
+    train_df = train_df[train_df["split"] == "train"]
+    n_fp_train = int((train_df.get("source", pd.Series(dtype=str)) == "explorer_fp").sum())
+    if n_fp_train and (
+        explorer_fp_loss_weight > 1.0 or explorer_fp_sample_weight > 1.0
+    ):
+        print(
+            f"explorer_fp train rows: {n_fp_train} "
+            f"(loss_weight={explorer_fp_loss_weight}, sample_weight={explorer_fp_sample_weight})",
+            flush=True,
+        )
+
+    train_sampler = None
+    shuffle = True
+    if explorer_fp_sample_weight > 1.0 and len(train_ds) > 0:
+        sw = train_ds.sample_weights()
+        train_sampler = WeightedRandomSampler(
+            sw, num_samples=len(sw), replacement=True
+        )
+        shuffle = False
+
     train_loader = DataLoader(
         train_ds,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=shuffle,
+        sampler=train_sampler,
         num_workers=num_workers,
         collate_fn=collate_crops,
         pin_memory=torch.cuda.is_available(),
@@ -198,6 +233,14 @@ def train_crop_from_config(
 
     device = _device()
     model = GentCropVerifier(**arch).to(device)
+    if resume_path is not None:
+        if not resume_path.is_file():
+            raise FileNotFoundError(f"resume_from not found: {resume_path}")
+        from treelidarnet.models.crop_verifier import load_crop_verifier
+
+        ckpt_model = load_crop_verifier(resume_path, device)
+        model.load_state_dict(ckpt_model.state_dict())
+        print(f"Resumed model weights from {resume_path}", flush=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
     pos_weight = None
@@ -205,6 +248,7 @@ def train_crop_from_config(
         pos_weight = torch.tensor([n_neg / n_pos], dtype=torch.float32, device=device)
         print(f"BCE pos_weight={pos_weight.item():.4f} (upweights rare class in the loss)", flush=True)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    use_row_weights = explorer_fp_loss_weight > 1.0
 
     writer = SummaryWriter(run_dir / "tb") if tensorboard else None
     if writer:
@@ -226,7 +270,14 @@ def train_crop_from_config(
             labels = batch["label"].to(device).unsqueeze(1)
             optimizer.zero_grad(set_to_none=True)
             logits = model(pts)
-            loss = loss_fn(logits, labels)
+            if use_row_weights:
+                per = F.binary_cross_entropy_with_logits(
+                    logits, labels, pos_weight=pos_weight, reduction="none"
+                )
+                w = batch["loss_weight"].to(device).unsqueeze(1)
+                loss = (per * w).sum() / w.sum().clamp_min(1e-8)
+            else:
+                loss = loss_fn(logits, labels)
             loss.backward()
             optimizer.step()
             train_loss += float(loss.item())

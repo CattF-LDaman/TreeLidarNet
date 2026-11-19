@@ -8,12 +8,13 @@ from pathlib import Path
 
 import torch
 
+from treelidarnet.explorer.combine import export_keep_passes, weighted_combo
 from treelidarnet.live_export import detections_to_rows, write_live_predictions, write_status
 from treelidarnet.models.crop_verifier import load_crop_verifier
 from treelidarnet.paths import exports_dir, repo_root
 from treelidarnet.postprocess import Detection
-from treelidarnet.verify_export import FilterExportResult, _load_predictions, _nearest_gt_dist
 from treelidarnet.verifier import score_detections_dual, score_detections_with_model
+from treelidarnet.verify_export import FilterExportResult, _load_predictions, _nearest_gt_dist
 
 
 def _resolve_live_inputs(
@@ -73,6 +74,9 @@ def filter_export_live(
     require_chip_rgb: bool = False,
     verifier_checkpoint_v2: Path | None = None,
     verifier_checkpoint_v3: Path | None = None,
+    combine_mode: str = "weighted",
+    w_v2: float = 0.5,
+    w_v3: float = 0.5,
 ) -> FilterExportResult:
     """Score every input detection; stream partial rows to live_dir for the map."""
     compare = verifier_checkpoint_v2 is not None and (
@@ -106,11 +110,25 @@ def filter_export_live(
             v2_ckpt = repo_root() / v2_ckpt
         model_v2 = load_crop_verifier(v2_ckpt, device)
         model_v3 = load_crop_verifier(v3_ckpt, device)
+        gate = (
+            f"combine={combine_mode} t={verifier_threshold}"
+            if combine_mode == "weighted"
+            else f"combine={combine_mode} threshold={verifier_threshold}"
+        )
+        if combine_mode == "weighted":
+            gate += f" w=({w_v2},{w_v3})"
         print(
             f"filter-export --live compare: v2={v2_ckpt.name} v3={v3_ckpt.name} "
-            f"on {len(preds)} detections (bev>={bev_min})",
+            f"on {len(preds)} detections (bev>={bev_min}; {gate})",
             flush=True,
         )
+        status_gate = {
+            "compare": True,
+            "verifier_checkpoints": {"v2": str(v2_ckpt), "v3": str(v3_ckpt)},
+            "combine_mode": combine_mode,
+            "w_v2": w_v2,
+            "w_v3": w_v3,
+        }
         write_status(
             status_path,
             phase="scoring",
@@ -118,9 +136,8 @@ def filter_export_live(
             total=len(preds),
             bev_min=bev_min,
             verifier_threshold=verifier_threshold,
-            compare=True,
-            verifier_checkpoints={"v2": str(v2_ckpt), "v3": str(v3_ckpt)},
             input=str(in_path),
+            **status_gate,
         )
     else:
         model_v3 = load_crop_verifier(verifier_checkpoint, device)
@@ -213,14 +230,31 @@ def filter_export_live(
         if d <= register_m:
             reg_in += 1
         if compare and dual_scores is not None:
-            vs = dual_scores[i].get("v3", 0.0)
+            v2s = float(dual_scores[i].get("v2", 0.0))
+            v3s = float(dual_scores[i].get("v3", 0.0))
+            if not export_keep_passes(
+                v2=v2s,
+                v3=v3s,
+                combine_mode=combine_mode,
+                threshold=verifier_threshold,
+                w_v2=w_v2,
+                w_v3=w_v3,
+            ):
+                continue
         else:
             vs = p.verifier_score if p.verifier_score is not None else 0.0
-        if vs < verifier_threshold:
-            continue
+            if vs < verifier_threshold:
+                continue
         kept.append(p)
         if kept_scores is not None and dual_scores is not None:
-            kept_scores.append(dual_scores[i])
+            row_scores = dict(dual_scores[i])
+            row_scores["combo"] = weighted_combo(
+                float(row_scores.get("v2", 0.0)),
+                float(row_scores.get("v3", 0.0)),
+                w_v2=w_v2,
+                w_v3=w_v3,
+            )
+            kept_scores.append(row_scores)
         if d > discovery_m:
             discovery_kept += 1
         if d <= register_m:
@@ -238,6 +272,11 @@ def filter_export_live(
             v2p = repo_root() / v2p
         payload["verifier_checkpoint_v2"] = str(v2p)
         payload["compare_verifiers"] = True
+        payload["verifier_combine_mode"] = combine_mode
+        payload["verifier_w_v2"] = w_v2
+        payload["verifier_w_v3"] = w_v3
+        if combine_mode == "weighted":
+            payload["verifier_combo_threshold"] = verifier_threshold
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(out_path, "wt", encoding="utf-8") as handle:
         json.dump(payload, handle)
@@ -258,6 +297,9 @@ def filter_export_live(
         verifier_threshold=verifier_threshold,
         output=str(out_path),
         compare=bool(compare),
+        combine_mode=combine_mode if compare else None,
+        w_v2=w_v2 if compare else None,
+        w_v3=w_v3 if compare else None,
     )
 
     result = FilterExportResult(
