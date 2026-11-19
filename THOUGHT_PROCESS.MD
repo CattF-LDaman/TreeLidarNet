@@ -900,7 +900,7 @@ LAZ → chips (BEV) → U-Net proposals (frozen epoch3_hot)
 
 **Train gate (your bar).** Start **`train-crop` v3_rgb** after register tiles are as complete as patch allows, then recount manifest loadable rows. Full **92.8k** city RGB is **not** required for that gate.
 
-**Full-city RGB duration (corrected).** With **`--only-missing-rgb`** and **`--jobs 1`**, the resume log shows **~80%** of queued chips getting writes and roughly **~100+ chips/min** scan throughput when the job is healthy — **~12–20 h** for **~92.8k**, not multi-day wall time (unless the machine sleeps or the job restarts). Earlier “days” wording mixed up **(a)** million-detection **filter-export** and **(b)** a pessimistic guess before **`--only-missing-rgb`** and chunked LAZ.
+**Full-city RGB duration (corrected).** With **`--only-missing-rgb`** and **`--jobs 1`**, the resume log shows **~80%** of queued chips getting writes and roughly **~100+ chips/min** scan throughput when the job is healthy — **~12–20 h** for **~92.8k**, not multi-day wall time (unless the machine sleeps or the job restarts). Earlier “days” wording mixed up **(a)** **1.17M**-scale scoring anxiety (real pool is **530k** @ 0.85 ≈ **few h**), **(b)** LAZ RGB patch, and **(c)** pre-**`--only-missing-rgb`** guesses.
 
 **Map QA signal (v2).** High-BEV rings **still** pass on **building walls** in the inner city — columnar returns + GRB negatives don’t catch every façade. **Hypothesis:** RGB on the **crop verifier** (v3) helps separate **vegetation tint / crown spread** from **flat painted walls** better than intensity + class alone.
 
@@ -961,7 +961,7 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 
 **Full-grid RGB (17 Nov).** Resumed **`make patch-chips-rgb-full`** (`--all-chips --only-missing-rgb --refresh-missing-manifest --jobs 1`). Queue **83,290** chips; **`Done: rgb on 79,460 chips (83,290 requested)`** — remainder = no LAZ color, match fail, or empty. Register + manifest passes had already completed (**2,165** + **1,155**). v3 scoring off-manifest detections is now **much** better covered on disk.
 
-**Full verifier “infer” (17 Nov).** User meant **`filter-export`**, not BEV **`infer-gent`**. Job: **`filter-export-verifier-full`** → **530,258** inputs @ **BEV ≥ 0.85** (not full **~1.17M** @ 0.20), dual v2+v3, streams to **`exports/inference/live/verified_predictions.json`**, output gz **`gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz`**. Log: **`data/logs/filter_export_verifier_full.log`**. Wall time: **multi-day** (2× forward per detection).
+**Full verifier “infer” (17 Nov).** User meant **`filter-export`**, not BEV **`infer-gent`**. Job: **`filter-export-verifier-full`** → **530,258** inputs @ **BEV ≥ 0.85** (not full **~1.17M** @ 0.20), dual v2+v3, streams to **`exports/inference/live/verified_predictions.json`**, output gz **`gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz`**. Log: **`data/logs/filter_export_verifier_full.log`**. **Measured wall time on this box: ~a few hours** (order **2–3 h** for 530k dual), not multi-day — early diary text overestimated (confused with **1.17M** BEV pool or RGB patch jobs).
 
 **Near miss — BEV re-infer.** Assistant briefly started **`make infer-gent-full`** (same path as shipped export). Stopped **~16k/133k** chips. **`gent_city_gent_canopy_v2.json.gz`** still **Nov 16 13:39**, **~29M**, **~1.17M** preds — **`infer-gent` only writes gz after full 133k loop** (non-live).
 
@@ -1132,7 +1132,7 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 
 ### 49. Batched dual verifier export (19 Nov night)
 
-**Problem.** Full **`filter-export --live`** on **~530k** peaks was **multi-day**: legacy path scored **one detection at a time**, **two full passes** (v2 then v3), **`np.load` per peak**, batch size 48 only paced **live JSON flushes** — not GPU tensor batching.
+**Problem.** Full **`filter-export --live`** on **~530k** peaks was **needlessly slow** (still **~few hours** wall time with the old serial path on 17 Nov, not multi-day): **one detection at a time**, **two full passes** (v2 then v3), **`np.load` per peak**; outer batch size 48 only paced **live JSON flushes** — not GPU tensor batching. §49 targets **shorter** re-exports on weighted + `_fp` reruns.
 
 **Fix (shipped).** `treelidarnet/verifier_batch.py`:
 
@@ -1275,7 +1275,7 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 | Verifier RGB (manifest gap) | remainder manifest | **Done** — **1,155** |
 | Verifier RGB (full grid) | `patch-chips-rgb-full` | **Done** — **79,460 / 83,290** |
 | v3 train | `gent_crop_verifier_v3_rgb` | **`best.pt`** val F1 **~0.899** (epoch 14) |
-| Dual verifier live | `filter-export --live` + v2+v3 | Pilot **25k** done; **full** @ BEV≥0.85 → **`_v2_v3_full.json.gz`** (**402,749** kept under **old v3≥0.5**; **re-export** for §47 weighted @ **0.45**) |
+| Dual verifier live | `filter-export --live` + v2+v3 | Pilot **25k** done; **full** @ BEV≥0.85 → **`_v2_v3_full.json.gz`** in **~few hours** (530k scored; **402,749** kept under **old v3≥0.5**; **re-export** for §47 weighted @ **0.45**) |
 | Crop QA | `serve-crop-qa` :8765 | Dual scores; discoveries filter **2 m** slider |
 | Explorer bundle | `exports/inference/explorer/` | **402,749** dets; **59,619** register; `detections.bin` + `register.bin` |
 | Explorer FP flags | `explorer_qa_flags.parquet` | Curator QA → **`explorer_fp`** rows in `crops_index` |
