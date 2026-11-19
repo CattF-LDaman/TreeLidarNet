@@ -52,7 +52,8 @@ uv run treelidarnet train --config configs/gent_bev_v1.yaml
 # DHMV RGB for verifier only (BEV still 4 ch): data-patch-chips-rgb [--all-chips] [--only-missing-rgb] [--register-chips] [--offset N]
 # Before v3_rgb train: --register-chips --only-missing-rgb --refresh-missing-manifest --jobs 1
 # uv run treelidarnet train-crop --config configs/gent_crop_verifier_v3_rgb.yaml
-# Dual verifier export (default): weighted 0.5*v2+0.5*v3 >= 0.45 after bev-min (see make filter-export-verifier-full)
+# Dual verifier export: weighted 0.5*v2+0.5*v3 >= 0.45; batched GPU (--infer-batch-size 64); resume from exports/inference/live/ unless --no-resume
+# make filter-export-verifier-full
 # uv run treelidarnet filter-export --live --verifier-v2 runs/gent_crop_verifier_v2/best.pt --verifier-v3 runs/gent_crop_verifier_v3_rgb/best.pt ...
 # Single-verifier: --verifier runs/.../best.pt --combine-mode v3_only
 # uv run treelidarnet infer-gent --verifier runs/gent_crop_verifier/best.pt --verifier-threshold 0.5
