@@ -15,7 +15,12 @@ data/logs/
 data/manifests/*.parquet
 data/manifests/gent_laz_manifest.json
 data/manifests/chips_index.parquet
-exports/
+exports/**
+!exports/inference/
+exports/inference/**
+!exports/inference/gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz
+!exports/inference/explorer/
+!exports/inference/explorer/**
 runs/
 *.pt
 *.pth

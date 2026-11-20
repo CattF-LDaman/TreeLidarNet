@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "magic": "TLEX",
+  "columns": [
+    "lon",
+    "lat",
+    "bev",
+    "v2",
+    "v3",
+    "dist_register_m",
+    "has_rgb"
+  ],
+  "detection_count": 391565,
+  "register_count": 59619,
+  "source": "/home/catt/TreeLidarNet/exports/inference/gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz",
+  "trees_parquet": "/home/catt/TreeLidarNet/data/manifests/gent_trees.parquet",
+  "built_at": "2026-11-20T00:31:38.948420+00:00",
+  "scores_precomputed": true,
+  "mark_rgb": false,
+  "rgb_checked": 0,
+  "detection_dtype_bytes": 28,
+  "register_dtype_bytes": 16
+}
