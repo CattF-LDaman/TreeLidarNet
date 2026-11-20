@@ -43,17 +43,37 @@ def _empty_df() -> pd.DataFrame:
             "flagged_at",
             "bundle_source",
             "active",
+            "gui_hidden",
         ]
     )
 
 
-def load_flags(path: Path | None = None, *, active_only: bool = True) -> pd.DataFrame:
+def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return _empty_df()
+    if "gui_hidden" not in df.columns:
+        df = df.copy()
+        df["gui_hidden"] = False
+    if "active" not in df.columns:
+        df = df.copy()
+        df["active"] = True
+    return df
+
+
+def load_flags(
+    path: Path | None = None,
+    *,
+    active_only: bool = True,
+    gui_visible_only: bool = False,
+) -> pd.DataFrame:
     path = path or default_flags_path()
     if not path.is_file():
         return _empty_df()
-    df = pd.read_parquet(path)
-    if active_only and len(df) and "active" in df.columns:
+    df = _ensure_columns(pd.read_parquet(path))
+    if active_only and len(df):
         df = df.loc[df["active"].astype(bool)]
+    if gui_visible_only and len(df):
+        df = df.loc[~df["gui_hidden"].astype(bool)]
     return df
 
 
@@ -94,9 +114,10 @@ def upsert_flag(
         "flagged_at": datetime.now(UTC).isoformat(),
         "bundle_source": str(bundle_source or ""),
         "active": True,
+        "gui_hidden": False,
     }
     if path.is_file():
-        df = pd.read_parquet(path)
+        df = _ensure_columns(pd.read_parquet(path))
     else:
         df = _empty_df()
     if len(df) and "flag_id" in df.columns:
@@ -110,7 +131,7 @@ def clear_flag(flag_id: str, *, path: Path | None = None) -> bool:
     path = path or default_flags_path()
     if not path.is_file():
         return False
-    df = pd.read_parquet(path)
+    df = _ensure_columns(pd.read_parquet(path))
     if df.empty or "flag_id" not in df.columns:
         return False
     mask = df["flag_id"] == flag_id
@@ -119,6 +140,44 @@ def clear_flag(flag_id: str, *, path: Path | None = None) -> bool:
     df.loc[mask, "active"] = False
     _save_df(df, path)
     return True
+
+
+def mark_flags_gui_hidden(
+    flag_ids: set[str] | list[str],
+    *,
+    path: Path | None = None,
+) -> int:
+    """Hide flags in the explorer UI after they are in the crop training index."""
+    ids = {str(i) for i in flag_ids if i}
+    if not ids:
+        return 0
+    path = path or default_flags_path()
+    if not path.is_file():
+        return 0
+    df = _ensure_columns(pd.read_parquet(path))
+    if df.empty:
+        return 0
+    mask = df["flag_id"].astype(str).isin(ids) & df["active"].astype(bool)
+    if not mask.any():
+        return 0
+    df.loc[mask, "gui_hidden"] = True
+    _save_df(df, path)
+    return int(mask.sum())
+
+
+def sync_gui_hidden_from_crop_index(
+    crops_index_path: Path,
+    *,
+    qa_flags_path: Path | None = None,
+) -> int:
+    """Mark active QA flags that appear as explorer_fp crops as GUI-hidden."""
+    if not crops_index_path.is_file():
+        return 0
+    ci = pd.read_parquet(crops_index_path)
+    if ci.empty or "source" not in ci.columns or "crop_id" not in ci.columns:
+        return 0
+    fp_ids = set(ci.loc[ci["source"] == "explorer_fp", "crop_id"].astype(str))
+    return mark_flags_gui_hidden(fp_ids, path=qa_flags_path)
 
 
 def flags_to_json_records(df: pd.DataFrame) -> list[dict[str, Any]]:

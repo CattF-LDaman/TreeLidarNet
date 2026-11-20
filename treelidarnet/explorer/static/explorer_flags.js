@@ -14,6 +14,10 @@
     return Math.round(v * p) / p;
   }
 
+  function isGuiHidden(f) {
+    return f && (f.gui_hidden === true || f.gui_hidden === 1);
+  }
+
   function indexFlags(list) {
     flagsById = {};
     flagsByKey = {};
@@ -38,8 +42,18 @@
     return flagsByKey[posKey(lon, lat)] || null;
   }
 
+  function isIncorporated(lon, lat) {
+    var f = flagAt(lon, lat);
+    return !!(f && isGuiHidden(f));
+  }
+
+  function isPendingFlag(lon, lat) {
+    var f = flagAt(lon, lat);
+    return !!(f && !isGuiHidden(f));
+  }
+
   function isFlagged(lon, lat) {
-    return !!flagAt(lon, lat);
+    return isPendingFlag(lon, lat);
   }
 
   function markFalsePositive(row, opts) {
@@ -95,15 +109,21 @@
   }
 
   function flagMarkers() {
-    return Object.keys(flagsById).map(function (id) {
-      var f = flagsById[id];
-      return { position: [f.lon, f.lat], flag_id: f.flag_id, reason: f.reason };
-    });
+    return Object.keys(flagsById)
+      .filter(function (id) {
+        return !isGuiHidden(flagsById[id]);
+      })
+      .map(function (id) {
+        var f = flagsById[id];
+        return { position: [f.lon, f.lat], flag_id: f.flag_id, reason: f.reason };
+      });
   }
 
   global.ExplorerFlags = {
     load: loadFlags,
     isFlagged: isFlagged,
+    isIncorporated: isIncorporated,
+    isPendingFlag: isPendingFlag,
     flagAt: flagAt,
     markFalsePositive: markFalsePositive,
     unflag: unflag,

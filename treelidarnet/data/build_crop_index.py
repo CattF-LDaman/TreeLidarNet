@@ -53,14 +53,16 @@ def _append_explorer_fp_rows(
     qa_flags_path: Path,
     chip_point_count: dict[str, int],
     min_chip_points: int = 32,
-) -> int:
+) -> tuple[int, list[str]]:
     if not qa_flags_path.is_file():
-        return 0
-    flags = pd.read_parquet(qa_flags_path)
-    if flags.empty or "active" not in flags.columns:
-        return 0
-    flags = flags.loc[flags["active"].astype(bool)]
+        return 0, []
+    from treelidarnet.explorer.qa_flags import load_flags
+
+    flags = load_flags(qa_flags_path, active_only=True, gui_visible_only=False)
+    if flags.empty:
+        return 0, []
     added = 0
+    merged_ids: list[str] = []
     for r in flags.to_dict("records"):
         gx, gy = float(r["x"]), float(r["y"])
         x0, y0 = chip_origin_for_point(gx, gy)
@@ -87,7 +89,8 @@ def _append_explorer_fp_rows(
             )
         )
         added += 1
-    return added
+        merged_ids.append(fid)
+    return added, merged_ids
 
 
 def build_crop_index(
@@ -205,11 +208,19 @@ def build_crop_index(
 
     default_qa = manifests_dir() / "explorer_qa_flags.parquet"
     qa_path = qa_flags_path if qa_flags_path is not None else default_qa
-    fp_added = _append_explorer_fp_rows(
+    fp_added, fp_flag_ids = _append_explorer_fp_rows(
         rows, qa_flags_path=qa_path, chip_point_count=chip_point_count
     )
     if fp_added:
         print(f"  explorer_fp: {fp_added} QA false-positive rows", flush=True)
+        from treelidarnet.explorer.qa_flags import mark_flags_gui_hidden
+
+        n_hide = mark_flags_gui_hidden(fp_flag_ids, path=qa_path)
+        if n_hide:
+            print(
+                f"  explorer_fp: {n_hide} flags hidden in explorer UI (kept for training)",
+                flush=True,
+            )
 
     df = pd.DataFrame(rows)
     out_path.parent.mkdir(parents=True, exist_ok=True)

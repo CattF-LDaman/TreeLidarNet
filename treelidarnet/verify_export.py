@@ -7,8 +7,10 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from treelidarnet.data.crs import wgs84_to_lambert
-from treelidarnet.eval import load_ground_truths
+from treelidarnet.eval import GroundTruth, load_ground_truths
 from treelidarnet.live_export import detections_to_rows
 from treelidarnet.postprocess import Detection
 from treelidarnet.verifier import score_detections
@@ -37,13 +39,36 @@ def _load_predictions(path: Path) -> list[Detection]:
     return out
 
 
-def _nearest_gt_dist(gts, x: float, y: float) -> float:
+def _nearest_gt_dist(gts: list[GroundTruth], x: float, y: float) -> float:
+    """Legacy scalar helper; prefer ``register_distances_m`` for batches."""
+    if not gts:
+        return 9999.0
     best = float("inf")
     for gt in gts:
         dx = gt.x - x
         dy = gt.y - y
         best = min(best, dx * dx + dy * dy)
     return best**0.5
+
+
+def register_distances_m(
+    gts: list[GroundTruth],
+    xs: np.ndarray,
+    ys: np.ndarray,
+) -> np.ndarray:
+    """Nearest eligible register tree distance (m) for each (x, y)."""
+    from scipy.spatial import cKDTree
+
+    n = len(xs)
+    if n == 0:
+        return np.zeros(0, dtype=np.float64)
+    if not gts:
+        return np.full(n, 9999.0, dtype=np.float64)
+    tree_xy = np.array([[g.x, g.y] for g in gts], dtype=np.float64)
+    tree = cKDTree(tree_xy)
+    q = np.column_stack([xs.astype(np.float64), ys.astype(np.float64)])
+    d, _ = tree.query(q, k=1)
+    return np.asarray(d, dtype=np.float64)
 
 
 def filter_export(
@@ -72,27 +97,26 @@ def filter_export(
         )
     gts = load_ground_truths(trees_parquet, eligible_only=True)
 
-    discovery_in = 0
-    discovery_kept = 0
-    reg_in = 0
-    reg_kept = 0
-    for p in preds:
-        d = _nearest_gt_dist(gts, p.x, p.y)
-        is_disc = d > discovery_m
-        is_reg = d <= register_m
-        if is_disc:
-            discovery_in += 1
-        if is_reg:
-            reg_in += 1
+    xs = np.array([p.x for p in preds], dtype=np.float64)
+    ys = np.array([p.y for p in preds], dtype=np.float64)
+    dists_pre = register_distances_m(gts, xs, ys)
+    discovery_in = int((dists_pre > discovery_m).sum())
+    reg_in = int((dists_pre <= register_m).sum())
 
     scored = score_detections(preds, checkpoint=verifier_checkpoint, radius_m=radius_m)
+    dists_scored = register_distances_m(
+        gts,
+        np.array([p.x for p in scored], dtype=np.float64),
+        np.array([p.y for p in scored], dtype=np.float64),
+    )
     kept: list[Detection] = []
-    for p in scored:
+    discovery_kept = reg_kept = 0
+    for i, p in enumerate(scored):
         vs = p.verifier_score if p.verifier_score is not None else 0.0
         if vs < verifier_threshold:
             continue
         kept.append(p)
-        d = _nearest_gt_dist(gts, p.x, p.y)
+        d = float(dists_scored[i])
         if d > discovery_m:
             discovery_kept += 1
         if d <= register_m:

@@ -71,10 +71,10 @@ filter-export-verifier-full:
 	PYTHONUNBUFFERED=1 uv run treelidarnet filter-export --live \
 	  --input exports/inference/gent_city_gent_canopy_v2.json.gz \
 	  --output exports/inference/gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz \
-	  --verifier-v2 runs/gent_crop_verifier_v2/best.pt \
-	  --verifier-v3 runs/gent_crop_verifier_v3_rgb/best.pt \
+	  --verifier-v2 runs/gent_crop_verifier_v2_fp2/best.pt \
+	  --verifier-v3 runs/gent_crop_verifier_v3_rgb_fp2/best.pt \
 	  --combine-mode weighted --verifier-threshold 0.45 \
-	  --bev-min 0.85
+	  --bev-min 0.85 --infer-batch-size 64
 
 sync:
 	uv sync

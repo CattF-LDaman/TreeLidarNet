@@ -112,7 +112,7 @@ make explorer-serve    # stops any server already on 8765 (e.g. viewer-crop-qa)
 
 Map and score bars use **precomputed** BEV + v2 + v3 from the bundle (no GPU verifier). Clicks only fetch LiDAR points. Optional: `serve-explorer --rescore-on-click`.
 
-**False-positive flags (verifier retrain):** In the dock, select a detection → **Mark false positive** (or press `f`). Flags persist to `data/manifests/explorer_qa_flags.parquet`. Optional **Hide flagged** hides those peaks on the map.
+**False-positive flags (verifier retrain):** In the dock, select a detection → **Mark false positive** (or press `f`). Flags persist to `data/manifests/explorer_qa_flags.parquet`. After `data-build-crop-index`, merged flags get `gui_hidden=True`: still **active** for training, but **no map marker** and those peaks stay off the map. **Hide new FP flags** only affects flags not yet in the crop index.
 
 ```bash
 # After QA flagging in the explorer:
@@ -130,7 +130,7 @@ uv run treelidarnet data-build-crop-index   # adds label=0 source=explorer_fp ro
 
 1. **Once (or after checkpoint promote):** `make filter-export-verifier-full` then `make explorer-bundle` — scores **~402k** peaks on unchanged `gent_city_gent_canopy_v2.json.gz` (BEV @ 0.80, **weighted combo ≥ 0.45**).
 2. **QA in explorer** — flag new false positives; old flags remain until unflagged.
-3. **After more flags:** `data-build-crop-index` → `train-crop` with `--run-name …_fp2` (incremental: point config `resume_from` at prior `…_fp/best.pt`, **5–8 epochs**; large batch: resume baseline `best.pt`, **15 epochs** as in yaml) → `eval-explorer-flags` → `make filter-export-verifier-full` (same BEV input, new verifier ckpts) → `make explorer-bundle`.
+3. **After more flags:** `data-build-crop-index` → `train-crop --config configs/gent_crop_verifier_v2_fp2.yaml` (and `…_v3_rgb_fp2.yaml`; **8 epochs**, resume `…_fp/best.pt`, **loss×15 / sample×10** unchanged) → `eval-explorer-flags` → `make filter-export-verifier-full` → `make explorer-bundle`.
 4. Do **not** re-run `infer-gent` for verifier/FP work alone.
 
 Needs `data/manifests/gent_trees.parquet` and chip `.npz` files. Optional: city export path in the map toolbar (default `exports/inference/gent_city_gent_canopy_v2.json.gz`).

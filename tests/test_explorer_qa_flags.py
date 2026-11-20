@@ -7,6 +7,8 @@ from treelidarnet.explorer.qa_flags import (
     clear_flag,
     flag_id_for_lonlat,
     load_flags,
+    mark_flags_gui_hidden,
+    sync_gui_hidden_from_crop_index,
     upsert_flag,
 )
 
@@ -38,6 +40,25 @@ def test_clear_flag_soft_deletes(tmp_path: Path):
     all_rows = load_flags(path, active_only=False)
     assert len(all_rows) == 1
     assert not bool(all_rows.iloc[0]["active"])
+
+
+def test_gui_hidden_keeps_active_for_training(tmp_path: Path):
+    path = tmp_path / "flags.parquet"
+    row = upsert_flag(lon=3.72, lat=51.05, path=path)
+    assert mark_flags_gui_hidden({row["flag_id"]}, path=path) == 1
+    assert load_flags(path, gui_visible_only=True).empty
+    assert len(load_flags(path, active_only=True, gui_visible_only=False)) == 1
+
+
+def test_sync_gui_hidden_from_crop_index(tmp_path: Path):
+    flags_path = tmp_path / "flags.parquet"
+    row = upsert_flag(lon=3.721, lat=51.054, path=flags_path)
+    crops = tmp_path / "crops.parquet"
+    pd.DataFrame(
+        [{"crop_id": row["flag_id"], "source": "explorer_fp", "label": 0}]
+    ).to_parquet(crops, index=False)
+    assert sync_gui_hidden_from_crop_index(crops, qa_flags_path=flags_path) == 1
+    assert load_flags(flags_path, gui_visible_only=True).empty
 
 
 def test_upsert_stores_lambert_xy(tmp_path: Path):

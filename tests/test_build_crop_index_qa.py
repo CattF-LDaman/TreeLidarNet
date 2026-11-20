@@ -3,7 +3,7 @@ import pandas as pd
 
 from treelidarnet.data.build_crop_index import build_crop_index
 from treelidarnet.data.crs import lambert_to_wgs84
-from treelidarnet.explorer.qa_flags import upsert_flag
+from treelidarnet.explorer.qa_flags import load_flags, upsert_flag
 
 
 def test_build_crop_index_merges_explorer_fp(tmp_path, monkeypatch):
@@ -47,3 +47,6 @@ def test_build_crop_index_merges_explorer_fp(tmp_path, monkeypatch):
     assert row["label"] == 0
     assert row["source"] == "explorer_fp"
     assert str(row["crop_id"]).startswith("fp_")
+    flags = load_flags(flags_path, active_only=True, gui_visible_only=False)
+    assert bool(flags.iloc[0]["gui_hidden"])
+    assert load_flags(flags_path, gui_visible_only=True).empty

@@ -360,7 +360,34 @@ def _cmd_filter_export(args: argparse.Namespace) -> int:
         infer_batch_size=int(args.infer_batch_size),
         resume=not bool(args.no_resume),
     )
-    if args.live:
+    if args.finalize_live:
+        from treelidarnet.filter_export_live import finalize_filter_export_live
+
+        live_dir = Path(args.live_dir) if args.live_dir else None
+        pred_path = (
+            Path(args.live_pred)
+            if args.live_pred
+            else (live_dir or exports_dir() / "inference" / "live") / "verified_predictions.json"
+        )
+        status_path = pred_path.parent / "verified_status.json"
+        finalize_filter_export_live(
+            in_path=Path(args.input),
+            out_path=Path(args.output),
+            trees_parquet=Path(args.trees),
+            live_pred_path=pred_path,
+            status_path=status_path,
+            verifier_checkpoint=Path(verifier),
+            verifier_threshold=float(args.verifier_threshold),
+            bev_min=float(args.bev_min),
+            discovery_m=float(args.discovery_m),
+            register_m=float(args.register_m),
+            verifier_checkpoint_v2=Path(args.verifier_v2) if args.verifier_v2 else None,
+            verifier_checkpoint_v3=Path(args.verifier_v3) if args.verifier_v3 else None,
+            combine_mode=str(args.combine_mode),
+            w_v2=float(args.w_v2),
+            w_v3=float(args.w_v3),
+        )
+    elif args.live:
         from treelidarnet.filter_export_live import filter_export_live
 
         filter_export_live(**common, bev_min=float(args.bev_min))
@@ -713,6 +740,21 @@ def main(argv: list[str] | None = None) -> int:
         "--live",
         action="store_true",
         help="Stream scored predictions to exports/inference/live/ for crop QA map",
+    )
+    p_filter.add_argument(
+        "--finalize-live",
+        action="store_true",
+        help="Write --output from existing live verified_predictions.json (skip GPU scoring)",
+    )
+    p_filter.add_argument(
+        "--live-pred",
+        default=None,
+        help="Path to live verified_predictions.json (default: exports/inference/live/)",
+    )
+    p_filter.add_argument(
+        "--live-dir",
+        default=None,
+        help="Directory for live JSON when --finalize-live (default: exports/inference/live)",
     )
     p_filter.add_argument(
         "--bev-min",

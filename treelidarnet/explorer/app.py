@@ -193,8 +193,17 @@ def create_app(
 
     @app.get("/explorer/api/flags")
     def list_flags():
-        df = load_flags(flags_path, active_only=True)
-        return jsonify({"flags": flags_to_json_records(df), "count": len(df)})
+        active = load_flags(flags_path, active_only=True, gui_visible_only=False)
+        pending = load_flags(flags_path, active_only=True, gui_visible_only=True)
+        records = flags_to_json_records(active)
+        return jsonify(
+            {
+                "flags": records,
+                "count": len(records),
+                "pending_count": len(pending),
+                "incorporated_count": len(records) - len(pending),
+            }
+        )
 
     @app.post("/explorer/api/flags")
     def create_flag():

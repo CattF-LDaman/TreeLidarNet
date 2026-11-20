@@ -85,11 +85,12 @@
 
   function compactVisible(cols, mask) {
     var n = mask.length;
-    var skipFlagged = hideFlagged && window.ExplorerFlags;
+    var EF = window.ExplorerFlags;
     var kept = 0;
     for (var i = 0; i < n; i++) {
       if (!mask[i]) continue;
-      if (skipFlagged && ExplorerFlags.isFlagged(cols.lon[i], cols.lat[i])) continue;
+      if (EF && EF.isIncorporated(cols.lon[i], cols.lat[i])) continue;
+      if (hideFlagged && EF && EF.isPendingFlag(cols.lon[i], cols.lat[i])) continue;
       kept++;
     }
     visibleLon = new Float32Array(kept);
@@ -101,7 +102,8 @@
     var j = 0;
     for (var k = 0; k < n; k++) {
       if (!mask[k]) continue;
-      if (skipFlagged && ExplorerFlags.isFlagged(cols.lon[k], cols.lat[k])) continue;
+      if (EF && EF.isIncorporated(cols.lon[k], cols.lat[k])) continue;
+      if (hideFlagged && EF && EF.isPendingFlag(cols.lon[k], cols.lat[k])) continue;
       visibleLon[j] = cols.lon[k];
       visibleLat[j] = cols.lat[k];
       visibleBev[j] = cols.bev[k];
