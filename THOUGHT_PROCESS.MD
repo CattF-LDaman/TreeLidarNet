@@ -1,6 +1,6 @@
 # TreeLidarNet — thought process (design diary)
 
-**Session:** 10–22 November 2026 (build day … **§50 fp2 promoted** … **§52 HugATree `/map` LiDAR layer** — **391,565** kept export on Ghentree)  
+**Session:** 10–22 November 2026 (build day … **§52 Ghentree `/map`** … **§53 prod deploy** … **§54 modal 3D point-size tuning** — **391,565** on [tree.luwe.be](https://tree.luwe.be/map?bron=lidar))  
 **Repo:** [TreeLidarNet](https://github.com/CattF-LDaman/TreeLidarNet) · references: HugATree, LuweDaman (Deck.GL map UX)  
 **Purpose of this file:** A readable narrative for a **project write-up** — what we wanted, how the goal changed, what we built and observed. Technical truth lives in `docs/SPEC.md`, `docs/TASK_GHENT_BROAD.md`, `docs/LABELS.md`, `docs/EVAL.md`.
 
@@ -131,6 +131,8 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **20 Nov** | **§50 fp2 promoted** | **`gui_hidden`**; **167** flags; **12-ep** `_fp2`; **391,565** kept export; best weighted explorer product to date |
 | **20 Nov** | **§51 export GIFs** | Full-city combo bounce GIF + single-chip pipeline reel (`treelidarnet/viz/`) |
 | **22 Nov** | **§52 Ghentree integration** | `make hugatree-bundle`; Deck layer + modal crops in **`~/Dev/HugATree`** |
+| **22 Nov PM** | **§53 prod + mobile UX** | **sshtop** deploy (~**1.74 GiB** rsync, bind-mount bundle); fullscreen LiDAR modal; **`/map` → stad** default |
+| **22 Nov PM** | **§54 modal 3D splats** | **WebGL on touch**; world size **0.72**; reverted deck **`radiusMinPixels`** (register dots) |
 | **22 Nov** | **Bundle QA fixes** | `crops.idx` **dist** from correct detection row; intensity **per-crop max** in pack codec |
 | **22 Nov** | **Map UX** | **Gevoeligheid** slider; export **floors**; discoveries **1.5 m** default; `?bron=` deep links; home teaser |
 | **22 Nov PM** | **LiDAR disc contrast** | Visible **combo min–max** hue spread + sat/light/opacity/radius ramps (§52) |
@@ -995,12 +997,13 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 | **Kept (weighted 0.45)** | **391,565** — current **ship** set |
 | Explorer bundle | **`exports/inference/explorer/`** — QA / combine lab |
 | **HugATree bundle** | **`make hugatree-bundle`** → sibling **`static/data/lidar/`** (**391,565** + **~1.15 GiB** pack local) |
-| **Ghentree `/map`** | LiDAR layer + filters + modal — **live on dev** when bundle on disk (§52) |
+| **Ghentree `/map`** | LiDAR layer + filters + modal — **live on prod** [tree.luwe.be](https://tree.luwe.be/map) (homelab **sshtop**, Cloudflare tunnel; §53) |
+| **Bundle on prod** | Host path **`~/HugATree/static/data/lidar/`** bind-mounted read-only; **not** in Docker build context |
 
 **Next steps (ordered):**
 
 1. **Public Ghentree QA** — hug map in **Beide**, tune **gevoeligheid** / discoveries; file new **`explorer_fp`** only if verifier retrain is justified.
-2. **Optional deploy** — host LiDAR bundle off git (CDN/disk); keep gitignore on **`static/data/lidar/`**.
+2. **Bundle updates** — `make hugatree-bundle` + **rsync** only (no image rebuild unless app code changes).
 3. **Further FP batch (§48)** only if map QA finds systematic failure modes — same frozen-BEV loop.
 4. **Marketing** — reuse §51 GIFs / pipeline reel; no model change required.
 
@@ -1241,7 +1244,7 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 - **Product rule:** bundle = **full** verified export; **browser filters** only (`localStorage` **`hugatree.map.lidarFilter.v2`**, still stores **`tCombo`**).
 - **Floors:** combo slider **export floor → 0.90**; BEV adv **≥ 0.85**; default **Alleen ontdekkingen** + **1.5 m** register distance; default **gevoeligheid ~56%** ≈ legacy **tCombo 0.65**.
 - **Gevoeligheid:** lay label; **higher % = more points** (`tComboFromSensitivity` inverse map).
-- **Deep link:** `/map?bron=stad|lidar|both` persists kaartbron.
+- **Deep link:** `/map?bron=stad|lidar|both` sets kaartbron; plain **`/map`** resets to **Stad Gent** (§53).
 - **Home:** `detection_count` teaser + quiet **register · LiDAR · register + LiDAR** links when bundle present.
 - **Onboarding CTA** (stad mode): gradient line cue toward kaartbron toggle (dismiss `localStorage`).
 
@@ -1272,6 +1275,57 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 **Ops.** Rebuild bundle after **export/checkpoint** changes, not for map-only threshold tweaks. **`make hugatree-bundle`** is long CPU (~hours); monitor pack growth.
 
 **Still out of scope.** HugATree DB/hugs on LiDAR points; server-side filter; hosting multi‑GB bundle in git.
+
+---
+
+### 53. Ghentree production deploy + mobile map polish (22 Nov PM)
+
+**Deploy (homelab `sshtop`, [tree.luwe.be](https://tree.luwe.be)).** Minimize outage: **rsync** bundle from dev (**~1.74 GiB**, ~48 s Tailscale) while old container still serves; **`git pull`**; **`DOCKER_BUILDKIT=1 docker compose build web`**; **`docker compose --profile tunnel up -d --no-deps web`** (tunnel container untouched). HugATree commits on **`main`**: integration **`aadb436`** → deploy prep **`02a0872`** ( **`.dockerignore`** `static/data/lidar`, **bind-mount** `./static/data/lidar` → `/app/static/data/lidar:ro`, **PWA v11**) → map UX chain **`6610b94`** … **`b12eab0`**.
+
+| Piece | Rationale |
+|-------|-----------|
+| **Bind-mount bundle** | **~1.7 GiB** pack must not **`COPY static/`** on every deploy — image stays ~2 MB context |
+| **rsync before pull** | Bundle gitignored; prod gets bytes from dev machine that ran **`make hugatree-bundle`** |
+| **No `compose down`** | Avoid killing **cloudflared**; only **`web` recreate** |
+
+**Mobile LiDAR modal (`6610b94`).** `<dialog>` lived inside **`#map-page`** (`overflow: hidden`, height minus in-flow tab bar) with Daisy **`modal-bottom`** → sheet looked **sliver / misaligned**. Fix: include **after** `.map-layout`; **`lidar-detail-modal--map`** fullscreen CSS (**≤767px**, **`z-index: 10050`**, flex-growing canvas); JS **portal to `document.body`** + **`requestAnimationFrame` resize** for Three.js.
+
+**Touch + dot size (`1620976`, `b12eab0`).**
+
+| Surface | Change |
+|---------|--------|
+| **Map pan/zoom** | **`user-select: none`** on map chrome (credits, labels); inputs still selectable — stops blue drag-highlight on mobile |
+| **Deck LiDAR scatter** | **`radiusMinPixels`** tried then **reverted** (`75b738c`) — bloated **register** tree discs, not the modal (§54) |
+| **Modal 3D crop** | Iterated in §54; shipped **touch `0.72` world** + **WebGL** |
+| **Kaartbron default** | Plain **`/map`** (tab bar, logo) → **Stad Gent** — **do not** restore **`localStorage`** unless **`?bron=`** in URL; home deep links unchanged |
+
+**Smoke (prod).** `/health` OK; **`/api/lidar/meta.json`** → **391,565** detections; **`/map?bron=lidar`** loads **`hugatree.css?v=103`**, modal hook class present.
+
+**Ops note.** PWA users may need refresh toast for **`map.js`** / **`crop_viewer_3d.js`** query bumps; bundle-only updates remain **rsync-only**.
+
+---
+
+### 54. Modal 3D crop — point size vs map dots (22 Nov PM)
+
+**Misread.** “LiDAR dots small on mobile” meant the **fullscreen modal point cloud** (`crop_viewer_3d.js`), not **Deck.GL** map scatter. A **`radiusMinPixels`** pass on the **LiDAR detections layer** distorted **Stad Gent register** discs → **reverted immediately** on HugATree **`75b738c`**. Register layers stay **meter radii only**.
+
+**Why modal points stayed tiny.** On phones, **`navigator.gpu`** often wins → **Three.js `WebGPURenderer`**. **`PointsMaterial`** sprites are **much smaller** than **WebGL `gl_PointSize`**. Screen-space **`size × DPR`** boosts helped desktop WebGPU but not enough on touch; **landscape** (>767px) also skipped early “mobile” CSS breakpoints.
+
+**What we shipped (HugATree `crop_viewer_3d.js`, commits `f9dfd76` → `a4eef0c`).**
+
+| Attempt | Outcome |
+|---------|---------|
+| WebGPU **pixel scale** (2.75×, then 4×) | Still small on phone WebGPU |
+| **Skip WebGPU on touch** (`pointer: coarse` or ≤991px) → **WebGL2** | Reliable sizing; status **「WebGL2 · touch」** |
+| Touch **world size 3.2** + closer camera | **Huge** blobs — rejected |
+| **1.05 → 0.72** world, **`sizeAttenuation: true`**, camera **1×** | Current prod compromise (~**1.7×** desktop **0.42**) |
+| Double **`requestAnimationFrame` resize** on modal open | Canvas layout after fullscreen flex |
+
+**Desktop.** WebGPU path keeps a **moderate screen-space boost** (scale **2.5×**, base **8×DPR**). **Explorer / TreeLidarNet** [`viewer/crop_viewer_3d.js`](viewer/crop_viewer_3d.js) still **0.42 world** — not synced with Ghentree yet.
+
+**Lesson for write-up.** **Map discs** (Deck, meters + optional min pixels) and **modal splats** (Three `PointsMaterial`, WebGPU vs WebGL) are **different renderers** — tune separately; never fix one by changing the other.
+
+**Open.** If **0.72** is still wrong, next step is **instanced billboards** or a shared constant synced from explorer QA, not more blind **`size`** multipliers.
 
 ---
 
@@ -1366,6 +1420,13 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 | 22 Nov | **Map filters = client-only** | Full export in bundle; **gevoeligheid** for lay users |
 | 22 Nov | **Idx `dist` bug** | Never index-sync detection columns after chip sort |
 | 22 Nov PM | **Visible-set LiDAR colour** | **`comboT`** min–max + multi-channel ramps; tooltips stay absolute |
+| 22 Nov PM | **§53 bind-mount bundle on prod** | Fast Docker rebuilds; **~1.7 GiB** off image; rsync-first deploy |
+| 22 Nov PM | **§53 fullscreen mobile modal** | Dialog outside clipped map grid; portal + flex canvas |
+| 22 Nov PM | **§53 mobile dot legibility** | **`user-select`** on map chrome; modal sizing deferred to §54 |
+| 22 Nov PM | **§54 revert deck `radiusMinPixels`** | Register **Stad Gent** dots must stay meter-based; modal ≠ map |
+| 22 Nov PM | **§54 WebGL on touch for modal** | WebGPU **`PointsMaterial`** unreliable on phones |
+| 22 Nov PM | **§54 touch world size 0.72** | After 3.2/1.05 overshoot; ~**1.7×** desktop splat |
+| 22 Nov PM | **§53 `/map` default stad** | Tab/logo entry = register layer; **`?bron=`** still for LiDAR deep links |
 
 ---
 
@@ -1412,6 +1473,8 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 | Pipeline chip GIF | `render_pipeline_chip_gif.py` | Single-chip BEV→verifier story (§51) |
 | HugATree bundle | `make hugatree-bundle` | **391,565** dets; **~1.15 GiB** `crops.pack.zst` typical (§52) |
 | Ghentree map | `~/Dev/HugATree` `/map` | TLEX layer + API crop fetch — builder/tests in this repo |
+| Ghentree prod | tree.luwe.be (sshtop) | **§53** bind-mount LiDAR dir; rsync + fast `web` rebuild |
+| Modal 3D (Ghentree) | HugATree `crop_viewer_3d.js` | Touch **0.72** world / WebGL; desktop WebGPU boost (§54) |
 
 ---
 
@@ -1432,9 +1495,10 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 - **Flanders-wide / OSM:** Stated as later-stage generalization and optional alignment data.
 - **Ops:** QGIS + parallel heavy jobs compete with train/infer on same machine. Training **stalls** on cold chip cache; warm cache gives ~**20 ms/step** (§39).
 - **Coverage holes:** Second-strip download and empty-chip rebuild **done** for training index (§38). Remaining east–west streak QA is separate from the verifier pivot.
-- **Ghentree:** LiDAR bundle **large** (~1 GB+); not in git; map UX lives in HugATree — rebuild bundle here after **new verified export** (§52).
+- **Ghentree:** LiDAR bundle **large** (~1 GB+); not in git; **prod** host mount (§53); map UX in HugATree — rebuild bundle here after **new verified export** (§52).
 - **Lay UX vs combo-t:** **Gevoeligheid %** is the public control; **`combo t: …%`** is muted technical readout for power users (§52).
 - **Map vs GIF colour:** Ghentree scatter uses **visible combo normalization** for contrast (§52); §51 raster/GIF uses **absolute** combo — do not expect pixel match between app map and full-city GIF at one slider setting.
+- **Modal 3D on mobile:** HugATree viewer tuned in §54; local **explorer `viewer/crop_viewer_3d.js`** may not match until copied — WebGPU/touch pitfalls apply to any consumer of shared viewer code.
 
 ---
 
@@ -1449,8 +1513,8 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 | [docs/DEV.md](docs/DEV.md) | Commands: train, infer-gent, live viewer |
 | [docs/VISUALIZATION.md](docs/VISUALIZATION.md) | Map layers and bundles |
 
-§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs. §37: **PointNet++** crop verifier (16 Nov: skip plain PointNet). §38: second strip on disk; empty-chip rebuild; first anti-carpet term at weight **0.1** (failed). §39: freeze **`epoch3_hot`**; light anti-carpet failed QA; **PointNet++ verifier** next with **safe negatives** (not carpet as label-0). §40: crop QA viewer; verifier training hygiene (val negatives, balanced BCE, skip bad crops, F1 checkpoint); **`gent_crop_verifier_v2`**. §41: **verifier-only RGB** — patch LAZ color into crop chips; **`gent_crop_verifier_v3_rgb`**. §42: **full city @ 0.80**, infer **resume-live**, export promotion, **COPC** patch fix, **RGB before** million-detection verifier. §43: **register-first RGB**, xy **matcher fix**, register + manifest patch. §44: **dual v2/v3 QA**, **full-grid RGB done**, **530k dual filter-export**, discoveries map filter, **no BEV overwrite** on aborted infer, **verifier-as-BEV-teacher** deferred. §45: **Flask explorer** — HugATree UX, **402k** columnar bundle, combine + Style UI (**shipped** 19 Nov). §46: **`explorer_fp`** manual flags → crops_index → verifier retrain; building-peak negatives. §47: **weighted dual export** **0.5·v2+0.5·v3 ≥ 0.45**; per-point RGB semantics; raw vs visible-normalized map colours. §48: **frozen BEV** product loop — full re-export then **incremental FP** fine-tune + re-export on same detection gz. §49: **batched** dual verifier scoring + **live resume** for `filter-export-verifier-full`. §50: **`gui_hidden`**; **`fp2`** **12-ep** incremental (**15/10** weights); **391,565** kept; **`_*_fp2` promoted** (best explorer product to date). §51: **full-city combo GIF** + **single-chip pipeline reel** (`treelidarnet/viz/`). §52: **HugATree bundle** + Ghentree **`/map`** LiDAR layer — TLEX lazy load, explorer-style filters with **gevoeligheid**, modal 3D crops, **`dist_register_m` idx fix**, intensity pack normalization, home teaser + **`?bron=`** links; **visible `comboT` colour/size ramps** when absolute combo looked flat (integration code split: **builder in TreeLidarNet**, **UI in HugATree**).
+§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs. §37: **PointNet++** crop verifier (16 Nov: skip plain PointNet). §38: second strip on disk; empty-chip rebuild; first anti-carpet term at weight **0.1** (failed). §39: freeze **`epoch3_hot`**; light anti-carpet failed QA; **PointNet++ verifier** next with **safe negatives** (not carpet as label-0). §40: crop QA viewer; verifier training hygiene (val negatives, balanced BCE, skip bad crops, F1 checkpoint); **`gent_crop_verifier_v2`**. §41: **verifier-only RGB** — patch LAZ color into crop chips; **`gent_crop_verifier_v3_rgb`**. §42: **full city @ 0.80**, infer **resume-live**, export promotion, **COPC** patch fix, **RGB before** million-detection verifier. §43: **register-first RGB**, xy **matcher fix**, register + manifest patch. §44: **dual v2/v3 QA**, **full-grid RGB done**, **530k dual filter-export**, discoveries map filter, **no BEV overwrite** on aborted infer, **verifier-as-BEV-teacher** deferred. §45: **Flask explorer** — HugATree UX, **402k** columnar bundle, combine + Style UI (**shipped** 19 Nov). §46: **`explorer_fp`** manual flags → crops_index → verifier retrain; building-peak negatives. §47: **weighted dual export** **0.5·v2+0.5·v3 ≥ 0.45**; per-point RGB semantics; raw vs visible-normalized map colours. §48: **frozen BEV** product loop — full re-export then **incremental FP** fine-tune + re-export on same detection gz. §49: **batched** dual verifier scoring + **live resume** for `filter-export-verifier-full`. §50: **`gui_hidden`**; **`fp2`** **12-ep** incremental (**15/10** weights); **391,565** kept; **`_*_fp2` promoted** (best explorer product to date). §51: **full-city combo GIF** + **single-chip pipeline reel** (`treelidarnet/viz/`). §52: **HugATree bundle** + Ghentree **`/map`** LiDAR layer — TLEX lazy load, explorer-style filters with **gevoeligheid**, modal 3D crops, **`dist_register_m` idx fix**, intensity pack normalization, home teaser + **`?bron=`** links; **visible `comboT` colour/size ramps** when absolute combo looked flat (integration code split: **builder in TreeLidarNet**, **UI in HugATree**). §53: **homelab prod** ([tree.luwe.be](https://tree.luwe.be)) — rsync bundle, Docker bind-mount, mobile fullscreen modal, drag-select fix, **plain `/map` → Stad Gent**. §54: **modal point cloud** sizing — revert deck **`radiusMinPixels`**; **WebGL on touch**; settle **0.72** world splats vs WebGPU pixel boost on desktop.
 
 ---
 
-*Design diary through **22 Nov 2026**: frozen BEV; **fp2 promoted** (**391,565** kept); **§51** marketing GIFs; **§52** Ghentree LiDAR on `/map` via **`make hugatree-bundle`**. Checkpoints and GiB bundles not in git. For code state, see git history on `main`.*
+*Design diary through **22 Nov 2026**: frozen BEV; **fp2 promoted** (**391,565** kept); **§51** GIFs; **§52–§54** Ghentree on **tree.luwe.be** (deploy + modal 3D tune). Checkpoints and GiB bundles not in git. HugATree **`a4eef0c`** (modal viewer); TreeLidarNet **`main`** (bundle builder).*
