@@ -5,9 +5,7 @@
     var v2 = row.v2;
     var v3 = row.v3;
     var dist = row.dist;
-    var hasRgb = row.hasRgb > 0.5;
     if (bev < cfg.bevMin) return false;
-    if (cfg.requireRgb && !hasRgb) return false;
     if (cfg.discoveriesOnly && dist <= cfg.discoveryMinM) return false;
     var mode = (cfg.mode || "either_or").toLowerCase();
     if (mode === "disagreement") return Math.abs(v2 - v3) >= cfg.disagreeDelta;
@@ -36,7 +34,6 @@
           v2: columns.v2[i],
           v3: columns.v3[i],
           dist: columns.dist[i],
-          hasRgb: columns.hasRgb[i],
         },
         cfg
       );

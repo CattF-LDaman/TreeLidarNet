@@ -22,6 +22,8 @@ exports/inference/**
 !exports/inference/gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz
 !exports/inference/explorer/
 !exports/inference/explorer/**
+exports/inference/*_loop.gif
+exports/inference/*_wallpaper.png
 runs/**
 !runs/gent_crop_verifier_v2_fp/
 !runs/gent_crop_verifier_v3_rgb_fp/

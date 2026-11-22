@@ -112,6 +112,10 @@ make explorer-serve    # stops any server already on 8765 (e.g. viewer-crop-qa)
 
 Map and score bars use **precomputed** BEV + v2 + v3 from the bundle (no GPU verifier). Clicks only fetch LiDAR points. Optional: `serve-explorer --rescore-on-click`.
 
+**Combo export GIF** (bouncing weighted v2+v3 threshold over full verified export): `make combo-export-gif` or `uv run python scripts/render_combo_export_gif.py` → `exports/inference/gent_combo_045_100_loop.gif` (local artifact, gitignored).
+
+**Pipeline chip GIF** (one tile, cinematic BEV → 0.85 → dual verifier → combo slider): `uv run python scripts/render_pipeline_chip_gif.py --chip-id gent_50m_X_Y` or `--lon 3.72 --lat 51.05` / `--x … --y …` (default: Ghent center). Output `exports/inference/pipeline_chip_*_loop.gif` (gitignored).
+
 **False-positive flags (verifier retrain):** In the dock, select a detection → **Mark false positive** (or press `f`). Flags persist to `data/manifests/explorer_qa_flags.parquet`. After `data-build-crop-index`, merged flags get `gui_hidden=True`: still **active** for training, but **no map marker** and those peaks stay off the map. **Hide new FP flags** only affects flags not yet in the crop index.
 
 ```bash
@@ -134,3 +138,21 @@ uv run treelidarnet data-build-crop-index   # adds label=0 source=explorer_fp ro
 4. Do **not** re-run `infer-gent` for verifier/FP work alone.
 
 Needs `data/manifests/gent_trees.parquet` and chip `.npz` files. Optional: city export path in the map toolbar (default `exports/inference/gent_city_gent_canopy_v2.json.gz`).
+
+**HugATree map LiDAR bundle** (TLEX + per-detection zstd crops for [HugATree](https://github.com/luwebe/hugatree) `/map`):
+
+```bash
+# Full export (~391k crops; long CPU, hundreds of MB pack):
+make hugatree-bundle
+# or:
+uv run treelidarnet data-build-hugatree-bundle \
+  --input exports/inference/gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz \
+  --output /home/catt/Dev/HugATree/static/data/lidar
+
+# Dev subset:
+uv run treelidarnet data-build-hugatree-bundle --limit 32 --output /tmp/lidar-mini
+```
+
+Artifacts: `detections.bin`, `meta.json`, `crops.idx`, `crops.pack.zst`. Crops use v3 verifier sampling (RGB chips, seed `hash(x,y,gi+1)`). HugATree serves them via `/api/lidar/*` (no GPU).
+
+HugATree `/map` ships the **full** export in the bundle and filters client-side (combo slider + advanced combine rules; `meta.combo_threshold` seeds the default slider only). Re-run `filter-export` and rebuild the bundle when the underlying detection set should change—not to tweak map-only thresholds.

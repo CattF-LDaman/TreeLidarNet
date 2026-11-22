@@ -16,7 +16,6 @@
       disagreeDelta: 0.15,
       discoveriesOnly: document.getElementById("discoveries-only").checked,
       discoveryMinM: parseFloat(document.getElementById("discovery-min").value),
-      requireRgb: document.getElementById("require-rgb").checked,
     };
   }
 
@@ -64,7 +63,6 @@
       "t-combo",
       "discoveries-only",
       "discovery-min",
-      "require-rgb",
       "show-register",
       "hide-flagged",
     ];
@@ -92,7 +90,6 @@
       if (cfg.tCombo != null) document.getElementById("t-combo").value = cfg.tCombo;
       if (cfg.discoveriesOnly) document.getElementById("discoveries-only").checked = true;
       if (cfg.discoveryMinM != null) document.getElementById("discovery-min").value = cfg.discoveryMinM;
-      if (cfg.requireRgb) document.getElementById("require-rgb").checked = true;
     } catch (e) {}
   }
 

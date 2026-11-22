@@ -42,6 +42,7 @@ from treelidarnet.train_crop import train_crop_from_config
 from treelidarnet.crop_qa_server import serve_crop_qa
 from treelidarnet.explorer.app import serve_explorer
 from treelidarnet.explorer.bundle import cli_build_bundle
+from treelidarnet.integrations.hugatree_bundle import cli_build_hugatree_bundle
 from treelidarnet.explorer.eval_flags import eval_explorer_flags, print_flag_eval_report
 from treelidarnet.verify_export import filter_export
 
@@ -285,12 +286,46 @@ def _cmd_data_build_crop_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_data_render_combo_gif(args: argparse.Namespace) -> int:
+    from treelidarnet.viz.combo_export_gif import render_combo_export_gif
+
+    inp = Path(args.input) if args.input else exports_dir() / "inference" / "gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz"
+    out = Path(args.output) if args.output else exports_dir() / "inference" / "gent_combo_045_100_loop.gif"
+    render_combo_export_gif(
+        export_gz=inp,
+        out_path=out,
+        low=float(args.low),
+        high=float(args.high),
+        step=float(args.step),
+        duration_ms=int(args.duration_ms),
+        canvas_px=int(args.width),
+        hue_low=float(args.hue_low),
+        hue_high=float(args.hue_high),
+        sat=float(args.sat),
+        light=float(args.light),
+        w_v2=float(args.w_v2),
+        w_v3=float(args.w_v3),
+    )
+    return 0
+
+
 def _cmd_data_build_explorer_bundle(args: argparse.Namespace) -> int:
     cli_build_bundle(
         input_path=Path(args.input) if args.input else None,
         output_dir=Path(args.output_dir) if args.output_dir else None,
         trees_parquet=Path(args.trees) if args.trees else None,
         mark_rgb=bool(args.mark_rgb),
+    )
+    return 0
+
+
+def _cmd_data_build_hugatree_bundle(args: argparse.Namespace) -> int:
+    cli_build_hugatree_bundle(
+        input_path=Path(args.input) if args.input else None,
+        output_dir=Path(args.output) if args.output else None,
+        trees_parquet=Path(args.trees) if args.trees else None,
+        limit=int(args.limit) if args.limit else None,
+        combo_threshold=float(args.combo_threshold),
     )
     return 0
 
@@ -857,6 +892,25 @@ def main(argv: list[str] | None = None) -> int:
     p_city.add_argument("--verifier-radius-m", default="8.0")
     p_city.set_defaults(func=_cmd_infer_gent)
 
+    p_combo_gif = sub.add_parser(
+        "data-render-combo-gif",
+        help="Bouncing combo-threshold GIF from verified export (weighted v2+v3 color)",
+    )
+    p_combo_gif.add_argument("--input", default=None, help="verified .json.gz")
+    p_combo_gif.add_argument("--output", default=None)
+    p_combo_gif.add_argument("--low", default="0.45")
+    p_combo_gif.add_argument("--high", default="1.0")
+    p_combo_gif.add_argument("--step", default="0.02")
+    p_combo_gif.add_argument("--duration-ms", default="160")
+    p_combo_gif.add_argument("--width", default="2400")
+    p_combo_gif.add_argument("--hue-low", default="0")
+    p_combo_gif.add_argument("--hue-high", default="142")
+    p_combo_gif.add_argument("--sat", default="0.38")
+    p_combo_gif.add_argument("--light", default="0.52")
+    p_combo_gif.add_argument("--w-v2", default="0.5")
+    p_combo_gif.add_argument("--w-v3", default="0.5")
+    p_combo_gif.set_defaults(func=_cmd_data_render_combo_gif)
+
     p_exp_bundle = sub.add_parser(
         "data-build-explorer-bundle",
         help="Columnar explorer bundle from dual-scored export",
@@ -870,6 +924,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Slow: set has_rgb per detection from chip npz",
     )
     p_exp_bundle.set_defaults(func=_cmd_data_build_explorer_bundle)
+
+    p_ht_bundle = sub.add_parser(
+        "data-build-hugatree-bundle",
+        help="HugATree LiDAR bundle (TLEX + zstd crops)",
+    )
+    p_ht_bundle.add_argument("--input", default=None, help="verified .json.gz")
+    p_ht_bundle.add_argument("--output", default=None, help="HugATree static/data/lidar")
+    p_ht_bundle.add_argument("--trees", default=None)
+    p_ht_bundle.add_argument("--limit", default=None, help="Build subset (tests/dev)")
+    p_ht_bundle.add_argument("--combo-threshold", default="0.45")
+    p_ht_bundle.set_defaults(func=_cmd_data_build_hugatree_bundle)
 
     p_exp = sub.add_parser(
         "serve-explorer",

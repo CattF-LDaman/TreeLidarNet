@@ -1,9 +1,9 @@
-.PHONY: sync sync-cpu test lint tensorboard viewer-serve viewer-stop viewer-crop-qa explorer-bundle explorer-serve patch-chips-rgb-full help
+.PHONY: sync sync-cpu test lint tensorboard viewer-serve viewer-stop viewer-crop-qa explorer-bundle hugatree-bundle explorer-serve combo-export-gif patch-chips-rgb-full help
 
 VIEWER_PORT ?= 8765
 
 help:
-	@echo "Targets: sync, sync-cpu, test, lint, tensorboard, viewer-crop-qa, explorer-bundle, explorer-serve, patch-chips-rgb-full, filter-export-verifier-full"
+	@echo "Targets: sync, sync-cpu, test, lint, tensorboard, viewer-crop-qa, explorer-bundle, hugatree-bundle, explorer-serve, combo-export-gif, patch-chips-rgb-full, filter-export-verifier-full"
 
 patch-chips-rgb-full:
 	PYTHONUNBUFFERED=1 uv run treelidarnet data-patch-chips-rgb \
@@ -23,6 +23,16 @@ viewer-crop-qa:
 
 explorer-bundle:
 	PYTHONUNBUFFERED=1 uv run treelidarnet data-build-explorer-bundle
+
+hugatree-bundle:
+	PYTHONUNBUFFERED=1 uv run treelidarnet data-build-hugatree-bundle \
+	  --output /home/catt/Dev/HugATree/static/data/lidar
+
+hugatree-bundle-monitor: ## Watch LiDAR pack growth (safe while build runs)
+	@INTERVAL=30 LOG_PROGRESS=1 ./scripts/monitor_hugatree_bundle.sh /home/catt/Dev/HugATree/static/data/lidar
+
+combo-export-gif:
+	PYTHONUNBUFFERED=1 uv run treelidarnet data-render-combo-gif
 
 viewer-stop:
 	@PID=$$(ss -H -tlnp 'sport = :$(VIEWER_PORT)' 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1); \

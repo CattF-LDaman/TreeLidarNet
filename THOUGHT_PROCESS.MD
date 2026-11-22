@@ -1,10 +1,10 @@
 # TreeLidarNet — thought process (design diary)
 
-**Session:** 10–20 November 2026 (build day … **§49 batched export** + **§50 fp2 promoted** — weighted map @ **391k** kept, **`gui_hidden`** FP curation)  
+**Session:** 10–22 November 2026 (build day … **§50 fp2 promoted** … **§52 HugATree `/map` LiDAR layer** — **391,565** kept export on Ghentree)  
 **Repo:** [TreeLidarNet](https://github.com/CattF-LDaman/TreeLidarNet) · references: HugATree, LuweDaman (Deck.GL map UX)  
 **Purpose of this file:** A readable narrative for a **project write-up** — what we wanted, how the goal changed, what we built and observed. Technical truth lives in `docs/SPEC.md`, `docs/TASK_GHENT_BROAD.md`, `docs/LABELS.md`, `docs/EVAL.md`.
 
-**Dates in this diary:** Narrative timeline = **10–19 November 2026**. A few **on-disk labels** still say **2025** in the name (e.g. `runs/gent_canopy_v2/archive/pre_full_grid_2025-11-11/`, `…_20251112.json.gz` in export archives) from when those folders were created; configs point at those literal paths. For a polished report, read “11 Nov” in prose as **Nov 2026** unless a quoted path is shown.
+**Dates in this diary:** Narrative timeline = **10–22 November 2026**. A few **on-disk labels** still say **2025** in the name (e.g. `runs/gent_canopy_v2/archive/pre_full_grid_2025-11-11/`, `…_20251112.json.gz` in export archives) from when those folders were created; configs point at those literal paths. For a polished report, read “11 Nov” in prose as **Nov 2026** unless a quoted path is shown.
 
 ---
 
@@ -50,6 +50,8 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **`explorer_fp`** | Manual false-positive flag at a detection peak → **`label=0`** crop row for verifier retrain (§46). |
 | **`gui_hidden`** | After `data-build-crop-index`, incorporated FP flags stay **active** for training but **hidden** on the explorer map (§50). |
 | **Verifier combo** | Dual export keep: **`0.5·v2 + 0.5·v3 ≥ combo-t`** (default **0.45**); stored as **`verifier_score`** on shipped gz (§47). |
+| **HugATree bundle** | Static **TLEX** + **zstd crop pack** for Ghentree `/map`: full fp2 export in repo, **subset in browser** via filters (§52). |
+| **Gevoeligheid** | Lay-facing map slider: **higher % → more LiDAR points** by **inverting** combo threshold between export floor and **0.90** (§52). |
 
 ---
 
@@ -127,6 +129,10 @@ Overnight the **full 50 m grid** finished (**133k** chips) after an in-place **v
 | **19 Nov PM** | **§48 Post-re-export FP loop** | Frozen BEV; full weighted re-export first; later flags → incremental `_fp` fine-tune + **filter-export** on same gz |
 | **19 Nov night** | **§49 Batched verifier export** | Chip-grouped crops + GPU batch forward; **`--infer-batch-size 64`**; resume from `live/verified_*.json` (stop job before restart) |
 | **20 Nov** | **§50 fp2 promoted** | **`gui_hidden`**; **167** flags; **12-ep** `_fp2`; **391,565** kept export; best weighted explorer product to date |
+| **20 Nov** | **§51 export GIFs** | Full-city combo bounce GIF + single-chip pipeline reel (`treelidarnet/viz/`) |
+| **22 Nov** | **§52 Ghentree integration** | `make hugatree-bundle`; Deck layer + modal crops in **`~/Dev/HugATree`** |
+| **22 Nov** | **Bundle QA fixes** | `crops.idx` **dist** from correct detection row; intensity **per-crop max** in pack codec |
+| **22 Nov** | **Map UX** | **Gevoeligheid** slider; export **floors**; discoveries **1.5 m** default; `?bron=` deep links; home teaser |
 
 ---
 
@@ -975,28 +981,27 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 
 ---
 
-## Where we left off (19 Nov 2026)
+## Where we left off (22 Nov 2026)
 
 **Detector (unchanged):** `best.pt` === **`epoch3_hot`**. **Shipped city export:** **`gent_city_gent_canopy_v2.json.gz`** @ **0.80**, **~1.17M** preds.
 
-**Verifier + product QA (active):**
+**Verifier product (promoted §50):**
 
 | Item | State |
 |------|--------|
-| Full dual verifier export | **`gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz`** — **530,258** scored @ **BEV ≥ 0.85** (inputs to high-conf subset) |
-| Explorer bundle | **`exports/inference/explorer/`** — **402,749** detections + **59,619** register rows in columnar `.bin` |
-| End-product UI | **`make explorer-serve`** → **http://127.0.0.1:8765/explorer** (Makefile **`viewer-stop`** frees port from crop QA) |
-| Map scores | **Precomputed** BEV + v2 + v3 from bundle — **no GPU** on pan/zoom; clicks fetch LiDAR crop only |
-| FP curation | **`data/manifests/explorer_qa_flags.parquet`** — manual **`explorer_fp`** → `data-build-crop-index` → retrain v2/v3 → **re-export** |
-| v2 / v3 checkpoints | Local **`runs/gent_crop_verifier_v2/best.pt`**, **`runs/gent_crop_verifier_v3_rgb/best.pt`** (not in git) |
+| Checkpoints | **`gent_crop_verifier_v2_fp2`**, **`gent_crop_verifier_v3_rgb_fp2`** — Makefile default for re-export |
+| Verified gz | **`gent_city_gent_canopy_v2_verified_v2_v3_full.json.gz`** — **530,258** scored @ **BEV ≥ 0.85** |
+| **Kept (weighted 0.45)** | **391,565** — current **ship** set |
+| Explorer bundle | **`exports/inference/explorer/`** — QA / combine lab |
+| **HugATree bundle** | **`make hugatree-bundle`** → sibling **`static/data/lidar/`** (**391,565** + **~1.15 GiB** pack local) |
+| **Ghentree `/map`** | LiDAR layer + filters + modal — **live on dev** when bundle on disk (§52) |
 
 **Next steps (ordered):**
 
-1. **Full verifier re-export on frozen BEV** — **`make filter-export-verifier-full`** (weighted **@ 0.45**, current or `_fp` ckpts) → **`make explorer-bundle`** (§47).
-2. **QA on that bundle** — flag **diverse** building FPs; use **Hide flagged** + combine sliders for end-product preview (§45).
-3. **Later FP batches (§48):** `data-build-crop-index` → incremental **`train-crop`** from `*_fp/best.pt` (**5–8 epochs**) or full **15** from baseline if large refresh → **`filter-export-verifier-full`** again (same BEV gz) → bundle → **`eval-explorer-flags`**.
-4. Optional: promote `_fp` paths in Makefile / **`serve-explorer --rescore-on-click`**; tighten explorer combine before changing export combo-t.
-5. Optional: GRB **point-in-building** veto at export (not v1); deep-scan ROI grid (separate idea).
+1. **Public Ghentree QA** — hug map in **Beide**, tune **gevoeligheid** / discoveries; file new **`explorer_fp`** only if verifier retrain is justified.
+2. **Optional deploy** — host LiDAR bundle off git (CDN/disk); keep gitignore on **`static/data/lidar/`**.
+3. **Further FP batch (§48)** only if map QA finds systematic failure modes — same frozen-BEV loop.
+4. **Marketing** — reuse §51 GIFs / pipeline reel; no model change required.
 
 **BEV rule unchanged:** frozen **`epoch3_hot`** unless **`qa-checkpoint-center`** passes on a replacement.
 
@@ -1191,6 +1196,69 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 
 ---
 
+### 51. Product visuals — combo GIF + chip pipeline (20 Nov)
+
+**Ask.** LinkedIn-ready motion: entire city at fixed **HSL** (hue **0°→142°**, sat **0.38**, light **0.52**) on **weighted combo** colour; **bouncing combo-t** frame loop; plus a **single-chip cinematic** walkthrough (BEV → peaks → **0.85** gate → dual verifier → combo slider).
+
+**Shipped (TreeLidarNet repo).**
+
+| Piece | Detail |
+|-------|--------|
+| **`treelidarnet/viz/hsl.py`** | Shared HSL + `weighted_combo` parity with explorer |
+| **`combo_export_gif.py`** | Lambert raster, **391,565** points, bounce **0.45↔1.0** |
+| **`pipeline_chip_gif.py`** | One **50 m** chip acts; HUD captions; combo bounce **0.45↔0.70** default |
+| **CLI / Make** | `data-render-combo-gif`, `make combo-export-gif`; `scripts/render_pipeline_chip_gif.py` |
+| **Static** | `scripts/render_combo_export_static.py` — 4K wallpaper at export floor |
+| **Tests** | `tests/test_viz_hsl.py`, `tests/test_pipeline_chip_gif.py` |
+
+**Artifacts** — under `exports/inference/` (gitignored): e.g. **`gent_combo_045_100_loop.gif`** (~19 MB, 56 frames), per-chip **`pipeline_chip_*_loop.gif`**.
+
+**Not changed:** BEV / verifier training; explorer bundle semantics.
+
+---
+
+### 52. Ghentree (HugATree) — public map LiDAR layer (22 Nov)
+
+**Goal (transcript).** Ship **fp2 product** on the hugging-trees app (`~/Dev/HugATree`): **Stad Gent / TreeLidarNet / Beide** kaartbron, lazy **TLEX** load with existing loader spinner, **filled discs** (explorer HSL on combo, BEV-sized), click → **modal + 3D crop** (RGB / Intensiteit) fetched per detection — **not** in initial download.
+
+**TreeLidarNet deliverables (this repo).**
+
+| Piece | Detail |
+|-------|--------|
+| **`treelidarnet/integrations/hugatree_bundle.py`** | From verified gz: **`detections.bin`**, **`meta.json`**, **`crops.idx`**, **`crops.pack.zst`** (v3 RGB crops, zstd **19**) |
+| **`hugatree_crop_codec.py`** | Quantized xyz + **per-crop max-normalized intensity** uint8 + RGB bytes |
+| **CLI** | `data-build-hugatree-bundle`; **`make hugatree-bundle`** → default `…/HugATree/static/data/lidar` |
+| **Monitor** | `scripts/monitor_hugatree_bundle.sh`, **`make hugatree-bundle-monitor`** (pack MB; no fake % progress) |
+| **Tests** | `tests/test_hugatree_crop_codec.py` |
+| **`docs/DEV.md`** | Build + size budget (~**33 MB** fixed + **~0.5–1.5 GB** pack) |
+
+**Full local build (22 Nov).** **391,565** detections; **`crops.pack.zst` ~1.15 GiB**; bundle gitignored on HugATree side. Served via Flask **`/api/lidar/*`** (no GPU).
+
+**HugATree map behaviour (sibling repo — diary facts for write-up).**
+
+- **`map_source_toggle.js`**, **`lidar_data.js`**, **`lidar_map_style.js`**, **`lidar_combine.js`** (explorer parity), **`lidar_filter_ui.js`**
+- **Product rule:** bundle = **full** verified export; **browser filters** only (`localStorage` **`hugatree.map.lidarFilter.v2`**, still stores **`tCombo`**).
+- **Floors:** combo slider **export floor → 0.90**; BEV adv **≥ 0.85**; default **Alleen ontdekkingen** + **1.5 m** register distance; default **gevoeligheid ~56%** ≈ legacy **tCombo 0.65**.
+- **Gevoeligheid:** lay label; **higher % = more points** (`tComboFromSensitivity` inverse map).
+- **Deep link:** `/map?bron=stad|lidar|both` persists kaartbron.
+- **Home:** `detection_count` teaser + quiet **register · LiDAR · register + LiDAR** links when bundle present.
+- **Onboarding CTA** (stad mode): gradient line cue toward kaartbron toggle (dismiss `localStorage`).
+
+**Bugfixes tied to bundle builder (TreeLidarNet).**
+
+1. **`dist_register_m` in `crops.idx`** — was synced by row index after **chip-sorted** index write → wrong tooltip vs modal; fixed by setting **`dist` at append** from `det_arr["dist_register_m"][local_i]`.
+2. **Intensity in pack** — DHMV intensity ~**0–0.01** in crop tensor; raw `×255` collapsed to **2–4** levels; **max-normalize per crop** before uint8.
+
+**3D modal (HugATree).**
+
+- **RGB** → DHMV channels; **Intensiteit** → **brand HSL ramp 0°→142°** (sat **0.38**, light **0.52**), per-crop min–max on intensity — aligned with map/explorer product colours (user rejected greyscale and mistaken channel swap).
+
+**Ops.** Rebuild bundle after **export/checkpoint** changes, not for map-only threshold tweaks. **`make hugatree-bundle`** is long CPU (~hours); monitor pack growth.
+
+**Still out of scope.** HugATree DB/hugs on LiDAR points; server-side filter; hosting multi‑GB bundle in git.
+
+---
+
 ## Decision log
 
 | When | Decision | Rationale |
@@ -1277,6 +1345,10 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 | 19 Nov PM | **§48 frozen-BEV FP loop** | Full weighted re-export first; later flags → incremental `_fp` train + re-`filter-export`, no `infer-gent` |
 | 19 Nov night | **§49 batched filter-export** | Chip-grouped + GPU batch; resume live JSON; same scores semantics as serial path |
 | 20 Nov | **§50 promote `_*_fp2`** | **391k** kept weighted @ **0.45**; **`eval-explorer-flags`** + explorer QA sign-off; **`gui_hidden`** for incorporated FPs |
+| 20 Nov | **§51 combo + chip GIFs** | Fixed HSL product colours for LinkedIn / wallpaper |
+| 22 Nov | **`data-build-hugatree-bundle`** | Ship fp2 detections + on-demand crops to Ghentree |
+| 22 Nov | **Map filters = client-only** | Full export in bundle; **gevoeligheid** for lay users |
+| 22 Nov | **Idx `dist` bug** | Never index-sync detection columns after chip sort |
 
 ---
 
@@ -1319,6 +1391,10 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 | Explorer bundle | `exports/inference/explorer/` | **402,749** dets; **59,619** register; `detections.bin` + `register.bin` |
 | Explorer FP flags | `explorer_qa_flags.parquet` | Curator QA → **`explorer_fp`** rows in `crops_index` |
 | LinkedIn reel | `scripts/render_verifier_linkedin_reel.py` | MP4: map zoom + RGB splat; needs ffmpeg + verified JSON |
+| Combo export GIF | `make combo-export-gif` | **391,565** pts, bounce combo-t **0.45–1.0** (§51) |
+| Pipeline chip GIF | `render_pipeline_chip_gif.py` | Single-chip BEV→verifier story (§51) |
+| HugATree bundle | `make hugatree-bundle` | **391,565** dets; **~1.15 GiB** `crops.pack.zst` typical (§52) |
+| Ghentree map | `~/Dev/HugATree` `/map` | TLEX layer + API crop fetch — builder/tests in this repo |
 
 ---
 
@@ -1339,6 +1415,8 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 - **Flanders-wide / OSM:** Stated as later-stage generalization and optional alignment data.
 - **Ops:** QGIS + parallel heavy jobs compete with train/infer on same machine. Training **stalls** on cold chip cache; warm cache gives ~**20 ms/step** (§39).
 - **Coverage holes:** Second-strip download and empty-chip rebuild **done** for training index (§38). Remaining east–west streak QA is separate from the verifier pivot.
+- **Ghentree:** LiDAR bundle **large** (~1 GB+); not in git; map UX lives in HugATree — rebuild bundle here after **new verified export** (§52).
+- **Lay UX vs combo-t:** **Gevoeligheid %** is the public control; **`combo t: …%`** is muted technical readout for power users (§52).
 
 ---
 
@@ -1353,8 +1431,8 @@ Log: **`data/logs/patch_chip_rgb_register.log`**. Expect **~30–90 min** for **
 | [docs/DEV.md](docs/DEV.md) | Commands: train, infer-gent, live viewer |
 | [docs/VISUALIZATION.md](docs/VISUALIZATION.md) | Map layers and bundles |
 
-§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs. §37: **PointNet++** crop verifier (16 Nov: skip plain PointNet). §38: second strip on disk; empty-chip rebuild; first anti-carpet term at weight **0.1** (failed). §39: freeze **`epoch3_hot`**; light anti-carpet failed QA; **PointNet++ verifier** next with **safe negatives** (not carpet as label-0). §40: crop QA viewer; verifier training hygiene (val negatives, balanced BCE, skip bad crops, F1 checkpoint); **`gent_crop_verifier_v2`**. §41: **verifier-only RGB** — patch LAZ color into crop chips; **`gent_crop_verifier_v3_rgb`**. §42: **full city @ 0.80**, infer **resume-live**, export promotion, **COPC** patch fix, **RGB before** million-detection verifier. §43: **register-first RGB**, xy **matcher fix**, register + manifest patch. §44: **dual v2/v3 QA**, **full-grid RGB done**, **530k dual filter-export**, discoveries map filter, **no BEV overwrite** on aborted infer, **verifier-as-BEV-teacher** deferred. §45: **Flask explorer** — HugATree UX, **402k** columnar bundle, combine + Style UI (**shipped** 19 Nov). §46: **`explorer_fp`** manual flags → crops_index → verifier retrain; building-peak negatives. §47: **weighted dual export** **0.5·v2+0.5·v3 ≥ 0.45**; per-point RGB semantics; raw vs visible-normalized map colours. §48: **frozen BEV** product loop — full re-export then **incremental FP** fine-tune + re-export on same detection gz. §49: **batched** dual verifier scoring + **live resume** for `filter-export-verifier-full`. §50: **`gui_hidden`**; **`fp2`** **12-ep** incremental (**15/10** weights); **391,565** kept; **`_*_fp2` promoted** (best explorer product to date).
+§13–§14: levers, chips, export, NMS, silent clusters. §15–§16: empty chips, then tree-weighted sampling. §17: curves, GIF, network size, epoch timing. §18: validation F1 and **per-tree peak loss**. §19: **candidate network** on register-tree crops (after detection). §20: discoveries stay allowed; **5 m** is the audit line; audit F1 is the infer score, strict is secondary, and training uses neither. §21: epoch 3 NaN was float16 saturation; restarted in fp32. §22: unknown band **12 m → 5 m**. §23: `loss/tree` down, `loss/pos` up. §24: this epoch is enough for this loss; no wider U-Net; point shape is stored and unused. §25: keep each detection crop for **Ghentree** as an isometric still or a small interactive 3D view of the points. §26: a full infer is about **13–14 h**. §27: `infer-gent` does register chips first, then empty chips, each growing outward from the center. §28: `loss/train_step` is the batch total (grid plus `0.01 × loss/tree`). §29: peaks are local maxima on the 0.25 m heatmap; that cell size is enough to place a tree. §30: clear the 8–15 m ignore ring after this epoch, then one more epoch. §31: infer builds the same grids without the per-point Python loop. §32: epoch 3’s center is about **50 rings per chip** at 0.20 and about **5** at 0.85. §33: the model has to stop inventing trees. §34: the 50 m grid is the mid-score corner lattice; peaks at **≥ 0.90** look like trees and have to survive the penalty. §35: the east–west streaks are a second flight line the center-point download never fetched. §36: the second model trains on every eligible register tree, including the ones the detector missed. Detections are where it runs. §37: **PointNet++** crop verifier (16 Nov: skip plain PointNet). §38: second strip on disk; empty-chip rebuild; first anti-carpet term at weight **0.1** (failed). §39: freeze **`epoch3_hot`**; light anti-carpet failed QA; **PointNet++ verifier** next with **safe negatives** (not carpet as label-0). §40: crop QA viewer; verifier training hygiene (val negatives, balanced BCE, skip bad crops, F1 checkpoint); **`gent_crop_verifier_v2`**. §41: **verifier-only RGB** — patch LAZ color into crop chips; **`gent_crop_verifier_v3_rgb`**. §42: **full city @ 0.80**, infer **resume-live**, export promotion, **COPC** patch fix, **RGB before** million-detection verifier. §43: **register-first RGB**, xy **matcher fix**, register + manifest patch. §44: **dual v2/v3 QA**, **full-grid RGB done**, **530k dual filter-export**, discoveries map filter, **no BEV overwrite** on aborted infer, **verifier-as-BEV-teacher** deferred. §45: **Flask explorer** — HugATree UX, **402k** columnar bundle, combine + Style UI (**shipped** 19 Nov). §46: **`explorer_fp`** manual flags → crops_index → verifier retrain; building-peak negatives. §47: **weighted dual export** **0.5·v2+0.5·v3 ≥ 0.45**; per-point RGB semantics; raw vs visible-normalized map colours. §48: **frozen BEV** product loop — full re-export then **incremental FP** fine-tune + re-export on same detection gz. §49: **batched** dual verifier scoring + **live resume** for `filter-export-verifier-full`. §50: **`gui_hidden`**; **`fp2`** **12-ep** incremental (**15/10** weights); **391,565** kept; **`_*_fp2` promoted** (best explorer product to date). §51: **full-city combo GIF** + **single-chip pipeline reel** (`treelidarnet/viz/`). §52: **HugATree bundle** + Ghentree **`/map`** LiDAR layer — TLEX lazy load, explorer-style filters with **gevoeligheid**, modal 3D crops, **`dist_register_m` idx fix**, intensity pack normalization, home teaser + **`?bron=`** links (integration code split: **builder in TreeLidarNet**, **UI in HugATree**).
 
 ---
 
-*Design diary through **20 Nov 2026**: frozen BEV; **weighted export @ 0.45** (§47); **`explorer_fp`** + **`gui_hidden`**; **`_*_fp2` promoted** — **391,565** kept, best explorer map to date (§50). Checkpoints not in git. For code state, see git history on `main`.*
+*Design diary through **22 Nov 2026**: frozen BEV; **fp2 promoted** (**391,565** kept); **§51** marketing GIFs; **§52** Ghentree LiDAR on `/map` via **`make hugatree-bundle`**. Checkpoints and GiB bundles not in git. For code state, see git history on `main`.*
